@@ -1,6 +1,7 @@
 # Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 
 """ Strategies using Zarr as an underlying format. """
+import logging
 import os
 from functools import partial
 from pathlib import Path
@@ -14,6 +15,8 @@ from ..core import CheckpointingException
 from ..dict_utils import dict_list_map_inplace
 from ..mapping import ShardedStateDict, ShardedTensor, is_main_replica
 from .base import LoadShardedStrategy, SaveShardedStrategy, StrategyAction, default_strategies
+
+logger = logging.getLogger(__name__)
 
 numpy_to_torch_dtype_dict = {
     np.bool_: torch.bool,
@@ -70,7 +73,7 @@ def _create_or_open_zarr_arrays(
             open_kwargs['synchronizer'] = zarr.ProcessSynchronizer(
                 str(checkpoint_dir / f'{ten.key}.sync')
             )
-        arr = zarr.open(checkpoint_dir / ten.key, 'r+', **open_kwargs)
+        arr = _open_zarr_array_verbose(checkpoint_dir / ten.key, 'r+', **open_kwargs)
         arrays.append(arr)
     return arrays
 
@@ -114,6 +117,7 @@ def _create_zarr_array(sharded_tensor: ShardedTensor, checkpoint_dir: Path):
             fill_value=None,
             write_empty_chunks=True,
         )
+        logger.debug(f'Created a new Zarr array at {checkpoint_dir / sharded_tensor.key}')
     except zarr.errors.ContainsArrayError as e:
         raise CheckpointingException(
             f'Array {checkpoint_dir / sharded_tensor.key} already exists'
@@ -142,12 +146,7 @@ class ZarrLoadShardedStrategy(LoadShardedStrategy):
 
 def _load_from_array(sharded_tensor: ShardedTensor, checkpoint_dir: Path):
     assert isinstance(sharded_tensor, ShardedTensor), type(sharded_tensor)
-    try:
-        arr = zarr.open(checkpoint_dir / sharded_tensor.key, 'r')
-    except zarr.errors.PathNotFoundError as e:
-        raise CheckpointingException(
-            f'Array {checkpoint_dir / sharded_tensor.key} not found'
-        ) from e
+    arr = _open_zarr_array_verbose(checkpoint_dir / sharded_tensor.key, 'r')
 
     if not sharded_tensor.allow_shape_mismatch and sharded_tensor.global_shape != arr.shape:
         _msg = (
@@ -159,6 +158,17 @@ def _load_from_array(sharded_tensor: ShardedTensor, checkpoint_dir: Path):
 
     x = arr[sharded_tensor.global_slice()]  # flattened tensors loading is delayed
     return postprocess_numpy_array(x, sharded_tensor)
+
+
+def _open_zarr_array_verbose(path: Path, mode: str, **open_kwargs):
+    try:
+        return zarr.open(str(path), mode, **open_kwargs)
+    except zarr.errors.PathNotFoundError as e:
+        ckpt_dir = path.parent
+        ckpt_files = [f.name for f in ckpt_dir.iterdir()]
+        err_msg = f'Array {path} not found'
+        logger.debug(f'{err_msg}. Checkpoint directory {ckpt_dir} content: {ckpt_files}')
+        raise CheckpointingException(err_msg) from e
 
 
 def postprocess_numpy_array(loaded_array, sharded_tensor, apply_flattened_range=True):
