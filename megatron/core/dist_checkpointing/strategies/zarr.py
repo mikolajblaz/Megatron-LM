@@ -117,7 +117,7 @@ def _create_zarr_array(sharded_tensor: ShardedTensor, checkpoint_dir: Path):
             fill_value=None,
             write_empty_chunks=True,
         )
-        logger.debug(f'Created a new Zarr array at {checkpoint_dir / sharded_tensor.key}')
+        print(f'Created a new Zarr array at {checkpoint_dir / sharded_tensor.key}')
     except zarr.errors.ContainsArrayError as e:
         raise CheckpointingException(
             f'Array {checkpoint_dir / sharded_tensor.key} already exists'
@@ -167,7 +167,7 @@ def _open_zarr_array_verbose(path: Path, mode: str, **open_kwargs):
         ckpt_dir = path.parent
         ckpt_files = [f.name for f in ckpt_dir.iterdir()]
         err_msg = f'Array {path} not found'
-        logger.debug(f'{err_msg}. Checkpoint directory {ckpt_dir} content: {ckpt_files}')
+        print(f'{err_msg}. Checkpoint directory {ckpt_dir} content: {ckpt_files}')
         raise CheckpointingException(err_msg) from e
 
 
