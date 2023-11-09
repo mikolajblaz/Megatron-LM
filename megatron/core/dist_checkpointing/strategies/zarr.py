@@ -57,21 +57,25 @@ def _create_or_open_zarr_arrays(
 ) -> List[zarr.Array]:
     arrays = []
     for ten in sharded_tensors:
-        if _should_create_array(ten):
-            _create_zarr_array(ten, checkpoint_dir)
-            # TODO: maybe reuse the opened arrays
+        arr = _create_zarr_array(ten, checkpoint_dir) if _should_create_array(ten) else None
+        arrays.append(arr)
 
     torch.distributed.barrier()
-    for ten in sharded_tensors:
-        # if is_main_replica(ten.replica_id) and set(ten.global_offset) == {0}:
-        #     continue
+    # Open arrays crated above by other processes
+    for arr_idx, ten in enumerate(sharded_tensors):
+        if arrays[arr_idx] is not None:
+            # array created by this process
+            assert _should_create_array(ten), ten
+            continue
+        if not is_main_replica(ten.replica_id):
+            # this array won't be needed for saving and can stay None
+            continue
         open_kwargs = {}
         if ten.flattened_range is not None:
             open_kwargs['synchronizer'] = zarr.ProcessSynchronizer(
                 str(checkpoint_dir / f'{ten.key}.sync')
             )
-        arr = zarr.open(checkpoint_dir / ten.key, 'r+', **open_kwargs)
-        arrays.append(arr)
+        arrays[arr_idx] = zarr.open(checkpoint_dir / ten.key, 'r+', **open_kwargs)
     return arrays
 
 
