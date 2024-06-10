@@ -80,7 +80,11 @@ class LoadCommonStrategy(LoadStrategyBase):
     """ Load strategy for common (non-sharded) objects """
 
     @abstractmethod
-    def load(self, checkpoint_dir: Path):
+    def load_common(self, checkpoint_dir: Path):
+        raise NotImplementedError
+
+    @abstractmethod
+    def load_sharded_objects(self, sharded_objects_state_dict: ShardedStateDict, checkpoint_dir: Path):
         raise NotImplementedError
 
 
@@ -111,7 +115,10 @@ class SaveCommonStrategy(SaveStrategyBase):
     """ Save strategy for common (non-sharded) objects """
 
     @abstractmethod
-    def save(self, common_state_dict: StateDict, checkpoint_dir: Path):
+    def save_common(self, common_state_dict: StateDict, checkpoint_dir: Path):
+        raise NotImplementedError
+
+    def save_sharded_objects(self, sharded_objects_state_dict: ShardedStateDict, checkpoint_dir: Path):
         raise NotImplementedError
 
 
