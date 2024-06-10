@@ -1,6 +1,7 @@
 # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 
 import io
+import logging
 
 import numpy as np
 import pytest
@@ -346,8 +347,8 @@ class TestNonStrictLoad:
     def setup_method(self, method):
         Utils.initialize_model_parallel(2, 4)  # doesn't matter for this test
 
-    # def teardown_method(self, method):
-    #     Utils.destroy_model_parallel()
+    def teardown_method(self, method):
+        Utils.destroy_model_parallel()
 
     def _get_base_state_dict(self):
         return {
@@ -377,25 +378,23 @@ class TestNonStrictLoad:
             assert 'Unexpected keys' in str(exc_info.value)
             assert 'Missing keys' not in str(exc_info.value)
 
-        Utils.destroy_model_parallel()
-
-    def test_missing_keys_raises_error_during_validation(self, tmp_path_dist_ckpt):
+    def test_missing_keys_raises_error_during_validation(self, caplog, tmp_path_dist_ckpt):
         sharded_state_dict = self._get_base_state_dict()
         with TempNamedDir(tmp_path_dist_ckpt / 'test_missing_keys_raises_error_during_validation') as ckpt_dir:
             save(sharded_state_dict, ckpt_dir)
 
             sharded_state_dict = self._get_base_state_dict()
             del sharded_state_dict['TenA']
-            with pytest.raises(CheckpointingException) as exc_info:
+            # For now missing keys are a warning, will become an error in MCore v0.9
+            with caplog.at_level(logging.WARNING):
                 load(sharded_state_dict, ckpt_dir)
-            assert 'Unexpected keys' not in str(exc_info.value)
-            assert 'Missing keys' in str(exc_info.value)
+            assert 'Unexpected keys' not in caplog.text
+            assert 'Missing keys' in caplog.text
 
             sharded_state_dict = self._get_base_state_dict()
             del sharded_state_dict['ObjA']
-            with pytest.raises(CheckpointingException) as exc_info:
+            # For now missing keys are a warning, will become an error in MCore v0.9
+            with caplog.at_level(logging.WARNING):
                 load(sharded_state_dict, ckpt_dir)
-            assert 'Unexpected keys' not in str(exc_info.value)
-            assert 'Missing keys' in str(exc_info.value)
-
-        Utils.destroy_model_parallel()
+            assert 'Unexpected keys' not in caplog.text
+            assert 'Missing keys' in caplog.text

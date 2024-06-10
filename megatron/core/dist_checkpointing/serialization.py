@@ -314,9 +314,9 @@ def _determine_missing_and_unexpected_keys(
     unexpected_keys = local_accessed_keys - ckpt_keys
 
     if missing_keys:
-        logger.warning(f'Dist ckpt load missing keys: {missing_keys}')
+        logger.debug(f'Dist ckpt load missing keys: {missing_keys}')
     if unexpected_keys:
-        logger.warning(f'Dist ckpt load unexpected keys: {unexpected_keys}')
+        logger.debug(f'Dist ckpt load unexpected keys: {unexpected_keys}')
 
     return missing_keys, unexpected_keys
 
@@ -335,27 +335,22 @@ def maybe_report_missing_and_unexpected_keys(missing_keys: Set[str], unexpected_
     if not missing_keys and not unexpected_keys:
         return
     missing_title_msg = f'Some keys found in the checkpoint are missing in the provided sharded state dict. '
-    missing_body_msg = f'Missing keys: {missing_keys}. '
+    missing_body_msg = f'Missing keys (for all ranks): {missing_keys}. '
     unexpected_title_msg = f'Unexpected keys (not found in the checkpoint) encountered in the provided sharded state dict. '
-    unexpected_body_msg = f'Unexpected keys: {unexpected_keys}. '
-    err_msg = ''
+    unexpected_body_msg = f'Unexpected keys (for this rank): {unexpected_keys}. '
     if missing_keys:
+        _missing_msg = missing_title_msg + missing_body_msg
         if raise_error:
-            err_msg += missing_title_msg
-        else:
-            logger.warning(missing_title_msg + missing_body_msg)
+            _missing_msg += (' NOTE: This warning will become an error in MCore v0.9.'
+                             ' Make sure to provide a sharded_state_dict covering the whole checkpoint,'
+                             ' or set `dist_checkpointing.load(..., strict=False)` flag')
+        logger.warning(_missing_msg)
     if unexpected_keys:
+        _unexpected_msg = unexpected_title_msg + unexpected_body_msg
         if raise_error:
-            err_msg += unexpected_title_msg
+            raise CheckpointingException(_unexpected_msg)
         else:
-            logger.warning(unexpected_title_msg + unexpected_body_msg)
-
-    if raise_error:
-        if missing_keys:
-            err_msg += missing_body_msg
-        if unexpected_keys:
-            err_msg += unexpected_body_msg
-        raise CheckpointingException(err_msg)
+            logger.warning(_unexpected_msg)
 
 
 def save(
