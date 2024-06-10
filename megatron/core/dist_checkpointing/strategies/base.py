@@ -87,6 +87,11 @@ class LoadCommonStrategy(LoadStrategyBase):
     def load_sharded_objects(self, sharded_objects_state_dict: ShardedStateDict, checkpoint_dir: Path):
         raise NotImplementedError
 
+    def load_sharded_metadata(self, checkpoint_dir: Path) -> ShardedStateDict:
+        if not self.can_handle_sharded_objects:
+            return {}
+        raise NotImplementedError
+
 
 class LoadShardedStrategy(LoadStrategyBase):
     """ Load strategy for sharded tensors """
@@ -109,6 +114,22 @@ class LoadShardedStrategy(LoadStrategyBase):
         raise NotImplementedError(
             f'{self.__class__.__name__} doesnt allow loading only sharded metadata'
         )
+
+    def load_sharded_metadata(self, checkpoint_dir: Path):
+        """Load sharded metadata from the checkpoint.
+
+        TODO
+
+        Returns a dictionary similar to a sharded state dict, but note that
+        the dictionary keys are simply ShardedTensor keys (contrary to the
+        actual sharded state dicts where keys correspond to state dict keys).
+
+        Dict values are ShardedTensors without any sharding (so, the only useful
+        information is tensors global shape and dtype).
+        """
+        if not self.can_handle_sharded_objects:
+            return self.load_tensors_metadata(checkpoint_dir)
+        raise NotImplementedError
 
 
 class SaveCommonStrategy(SaveStrategyBase):

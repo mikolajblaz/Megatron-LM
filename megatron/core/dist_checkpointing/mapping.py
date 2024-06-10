@@ -401,6 +401,15 @@ class ShardedObject(ShardedBase):
     def __str__(self):
         return f'{self.__class__.__name__}(key=\'{self.key}\')'
 
+    @classmethod
+    def empty_from_unique_key(cls, unique_key, replica_id: ReplicaId = 0) -> 'ShardedObject':
+        key, shard_key = unique_key.split('/')
+        shard_str, offset, shape = shard_key.split('_')
+        assert shard_str == 'shard'
+        offset = tuple(map(int, offset.split('.')))
+        shape = tuple(map(int, shape.split('.')))
+        return cls(key, None, shape, offset, replica_id)
+
 
 @dataclass
 class ShardedTensorFactory(ShardedBase):

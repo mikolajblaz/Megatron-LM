@@ -26,7 +26,7 @@ from torch.distributed.checkpoint import (
     Metadata,
     SavePlan,
     TensorStorageMetadata,
-    WriteItem,
+    WriteItem, Metadata, BytesStorageMetadata,
 )
 from torch.distributed.checkpoint._nested_dict import FLATTEN_MAPPING, unflatten_state_dict
 from torch.distributed.checkpoint._traverse import OBJ_PATH, traverse_state_dict
@@ -602,10 +602,11 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
         _restore_dict_types(mcore_state_dict, orig_sharded_state_dict)
         return mcore_state_dict
 
-    def load_tensors_metadata(self, checkpoint_dir: Path):
+    def load_tensors_metadata(self, checkpoint_dir: Path, metadata: Metadata = None):
         """Uses tensors metadata stored in the metadata file."""
-        fs_reader = FileSystemReader(checkpoint_dir)
-        metadata = fs_reader.read_metadata()
+        if metadata is None:
+            fs_reader = FileSystemReader(checkpoint_dir)
+            metadata = fs_reader.read_metadata()
 
         mcore_data = getattr(metadata, 'mcore_data', {})
         sharded_metadata = {}
@@ -632,6 +633,21 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
                     flattened_range=slice(0, unflat_ten.numel()),  # whole slice
                 ).without_data()
 
+        return sharded_metadata
+
+    def load_sharded_metadata(self, checkpoint_dir: Path) -> ShardedStateDict:
+        """Uses tensors and objects metadata stored in the metadata file."""
+        fs_reader = FileSystemReader(checkpoint_dir)
+        metadata = fs_reader.read_metadata()
+
+        sharded_metadata = {}
+        for metadata_key, storage_metadata in metadata.state_dict_metadata.items():
+            if not isinstance(storage_metadata, BytesStorageMetadata):
+                continue
+            sh_obj = ShardedObject.empty_from_unique_key(metadata_key)
+            sharded_metadata[sh_obj.unique_key] = sh_obj
+
+        sharded_metadata.update(self.load_tensors_metadata(checkpoint_dir, metadata))
         return sharded_metadata
 
     def can_handle_sharded_objects(self):

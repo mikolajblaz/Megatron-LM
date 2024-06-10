@@ -391,12 +391,11 @@ class TestNonStrictLoad:
             assert 'Unexpected keys' not in str(exc_info.value)
             assert 'Missing keys' in str(exc_info.value)
 
-            # TODO:
-            # sharded_state_dict = self._get_base_state_dict()
-            # del sharded_state_dict['ObjA']
-            # with pytest.raises(CheckpointingException) as exc_info:
-            #     load(sharded_state_dict, ckpt_dir)
-            # assert 'Unexpected keys' not in str(exc_info.value)
-            # assert 'Missing keys' in str(exc_info.value)
+            sharded_state_dict = self._get_base_state_dict()
+            del sharded_state_dict['ObjA']
+            with pytest.raises(CheckpointingException) as exc_info:
+                load(sharded_state_dict, ckpt_dir)
+            assert 'Unexpected keys' not in str(exc_info.value)
+            assert 'Missing keys' in str(exc_info.value)
 
         Utils.destroy_model_parallel()

@@ -4,6 +4,7 @@
 
 import logging
 import os
+from itertools import product
 from pathlib import Path
 
 import torch
@@ -100,6 +101,20 @@ class TorchCommonLoadStrategy(LoadCommonStrategy):
             return loaded_obj
 
         return dict_list_map_inplace(load_sharded_object, sharded_objects_state_dict)
+
+    def load_sharded_metadata(self, checkpoint_dir: Path) -> ShardedStateDict:
+        sharded_metadata = {}
+        for subdir in checkpoint_dir.iterdir():
+            if not subdir.is_dir():
+                continue
+            shard_files = list(subdir.glob('shard_*.pt'))
+            if not shard_files:
+                continue
+            for shard_file in shard_files:
+                full_key = f'{subdir.name}/{shard_file.name}'
+                sh_obj = ShardedObject.empty_from_unique_key(full_key)
+                sharded_metadata[sh_obj.unique_key] = sh_obj
+        return sharded_metadata
 
     @property
     def can_handle_sharded_objects(self):

@@ -133,8 +133,19 @@ def load(
 
     if validate_access_integrity or not strict:
         local_metadata, global_metadata = determine_global_metadata(sharded_state_dict)
-        ckpt_sharded_metadata = sharded_strategy.load_tensors_metadata(checkpoint_dir)
-        missing_keys, unexpected_keys = _determine_missing_and_unexpected_keys(ckpt_sharded_metadata, local_metadata, global_metadata)
+        try:
+            _load_sharded_metadata_not_implemented = False
+            ckpt_sharded_metadata = sharded_strategy.load_sharded_metadata(checkpoint_dir)
+        except NotImplementedError:
+            logger.warning('Sharded strategy must implement a `load_sharded_metadata` method in order to verify load correctness.'
+                           ' Skipping verification.'
+                           ' NOTE: This warning will become an error in MCore v0.9')
+            _load_sharded_metadata_not_implemented = True
+
+        if _load_sharded_metadata_not_implemented:
+            missing_keys, unexpected_keys = [], []
+        else:
+            missing_keys, unexpected_keys = _determine_missing_and_unexpected_keys(ckpt_sharded_metadata, local_metadata, global_metadata)
 
     if validate_access_integrity:
         maybe_report_missing_and_unexpected_keys(missing_keys, unexpected_keys, raise_error=True)
@@ -247,13 +258,12 @@ def load_sharded_metadata(
     sharded_strategy, common_strategy = _verify_checkpoint_and_load_strategy(checkpoint_dir, sharded_strategy)
     sharded_metadata = sharded_strategy.load_sharded_metadata(Path(checkpoint_dir))
     if not sharded_strategy.can_handle_sharded_objects:
-        common_strategy.load_sharded_metadata()
-        sharded_objects, sharded_state_dict = load_sharded_objects(
-            sharded_state_dict, checkpoint_dir
-        )
-        merge(common_state_dict, sharded_objects)
-
-    pass
+        if not common_strategy.can_handle_sharded_objects:
+            raise CheckpointingException(f'Either sharded strategy or common strategy must implement ShardedObjects saving.'
+                                         f' Both {sharded_strategy} and {common_strategy} specify can_handle_sharded_objects=False')
+        common_metadata = common_strategy.load_sharded_metadata(checkpoint_dir)
+        sharded_metadata = merge(sharded_metadata, common_metadata)
+    return sharded_metadata
 
 
 def load_plain_tensors(checkpoint_dir: str):
@@ -296,13 +306,10 @@ def _determine_missing_and_unexpected_keys(
     Returns:
 
     """
-    global_accessed_keys = set(sh_base.key for rank_metadata in global_metadata for sh_base in rank_metadata
-                               if isinstance(sh_base, ShardedTensor))  # TODO: get rid of the `if` filter
-    local_accessed_keys = set(sh_base.key for sh_base in local_metadata
-                              if isinstance(sh_base, ShardedTensor))  # TODO: get rid of the `if` filter
-    ckpt_keys = set(ckpt_sharded_metadata.keys())
+    global_accessed_keys = set(sh_base.key for rank_metadata in global_metadata for sh_base in rank_metadata)
+    local_accessed_keys = set(sh_base.key for sh_base in local_metadata)
+    ckpt_keys = set(sh_base.key for sh_base in ckpt_sharded_metadata.values())
 
-    # TODO: what about ShardedObjects?
     missing_keys = ckpt_keys - global_accessed_keys
     unexpected_keys = local_accessed_keys - ckpt_keys
 
