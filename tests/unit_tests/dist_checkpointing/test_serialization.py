@@ -340,3 +340,63 @@ class TestSerialization:
             assert torch.all(loaded_state_dict['flexible'] == expected_tensor)
 
         Utils.destroy_model_parallel()
+
+
+class TestNonStrictLoad:
+    def setup_method(self, method):
+        Utils.initialize_model_parallel(2, 4)  # doesn't matter for this test
+
+    # def teardown_method(self, method):
+    #     Utils.destroy_model_parallel()
+
+    def _get_base_state_dict(self):
+        return {
+            'TenA': ShardedTensor.from_rank_offsets('TenA', torch.arange(2), replica_id=Utils.rank),
+            'TenB': ShardedTensor.from_rank_offsets('TenB', torch.arange(3), (0, Utils.rank, Utils.world_size), replica_id=0),
+            'TenC': ShardedTensor.from_rank_offsets('TenC', torch.arange(3), replica_id=Utils.world_size - Utils.rank - 1),
+            'ObjA': ShardedObject('ObjA', object(), (1,), (0,), replica_id=Utils.rank),
+            'ObjB': ShardedObject('ObjB', object(), (Utils.world_size,), (Utils.rank,), replica_id=0),
+        }
+
+    def test_unexpected_keys_raises_error_during_validation(self, tmp_path_dist_ckpt):
+        sharded_state_dict = self._get_base_state_dict()
+        with TempNamedDir(tmp_path_dist_ckpt / 'test_unexpected_keys_raises_error_during_validation') as ckpt_dir:
+            save(sharded_state_dict, ckpt_dir)
+
+            sharded_state_dict = self._get_base_state_dict()
+            sharded_state_dict['TenD'] = ShardedTensor.from_rank_offsets('TenD', torch.arange(3), replica_id=Utils.rank)
+            with pytest.raises(CheckpointingException) as exc_info:
+                load(sharded_state_dict, ckpt_dir)
+            assert 'Unexpected keys' in str(exc_info.value)
+            assert 'Missing keys' not in str(exc_info.value)
+
+            sharded_state_dict = self._get_base_state_dict()
+            sharded_state_dict['ObjD'] = ShardedTensor.from_rank_offsets('ObjD', torch.arange(3), replica_id=Utils.rank)
+            with pytest.raises(CheckpointingException) as exc_info:
+                load(sharded_state_dict, ckpt_dir)
+            assert 'Unexpected keys' in str(exc_info.value)
+            assert 'Missing keys' not in str(exc_info.value)
+
+        Utils.destroy_model_parallel()
+
+    def test_missing_keys_raises_error_during_validation(self, tmp_path_dist_ckpt):
+        sharded_state_dict = self._get_base_state_dict()
+        with TempNamedDir(tmp_path_dist_ckpt / 'test_missing_keys_raises_error_during_validation') as ckpt_dir:
+            save(sharded_state_dict, ckpt_dir)
+
+            sharded_state_dict = self._get_base_state_dict()
+            del sharded_state_dict['TenA']
+            with pytest.raises(CheckpointingException) as exc_info:
+                load(sharded_state_dict, ckpt_dir)
+            assert 'Unexpected keys' not in str(exc_info.value)
+            assert 'Missing keys' in str(exc_info.value)
+
+            # TODO:
+            # sharded_state_dict = self._get_base_state_dict()
+            # del sharded_state_dict['ObjA']
+            # with pytest.raises(CheckpointingException) as exc_info:
+            #     load(sharded_state_dict, ckpt_dir)
+            # assert 'Unexpected keys' not in str(exc_info.value)
+            # assert 'Missing keys' in str(exc_info.value)
+
+        Utils.destroy_model_parallel()

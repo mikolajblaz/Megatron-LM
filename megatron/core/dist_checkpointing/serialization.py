@@ -11,8 +11,9 @@ import logging
 import os
 from collections import Counter, defaultdict
 from itertools import chain
+from operator import attrgetter
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple, Union
+from typing import Iterable, List, Optional, Tuple, Union, Any, Set
 
 import numpy as np
 import torch
@@ -24,7 +25,7 @@ from .dict_utils import (
     extract_matching_values,
     map_reduce,
     merge,
-    nested_values,
+    nested_values, dict_list_map_outplace,
 )
 from .mapping import (
     CheckpointingException,
@@ -35,7 +36,7 @@ from .mapping import (
     StateDict,
     apply_factories,
     apply_factory_merges,
-    is_main_replica,
+    is_main_replica, ShardedBase,
 )
 from .strategies.async_utils import AsyncRequest
 from .strategies.base import (
@@ -54,6 +55,10 @@ from .utils import (
     extract_sharded_tensors_or_nonpersistent,
 )
 
+# TODO
+LocalMetadata = List[Union[ShardedTensor, ShardedObject]]
+GlobalMetadata = List[LocalMetadata]
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,6 +68,7 @@ def load(
     sharded_strategy: Union[LoadShardedStrategy, Tuple[str, int], None] = None,
     common_strategy: Union[LoadCommonStrategy, Tuple[str, int], None] = None,
     validate_access_integrity: bool = True,
+    strict: bool = True,
 ) -> StateDict:
     """Loading entrypoint.
 
@@ -86,6 +92,8 @@ def load(
         common_strategy (LoadCommonStrategy, Tuple[str, int], optional): configures loading behavior for common data
         validate_access_integrity (bool default = True): checks if each tensor shard is accessed
             exactly once (as main replica) by some process
+        strict (bool, optional): If False, unexpected or missing keys to load will be ignored
+            and reported back as part of the return value. Defaults to True.
     """
     sharded_strategy, common_strategy = _verify_checkpoint_and_load_strategy(checkpoint_dir, sharded_strategy, common_strategy)
 
@@ -105,11 +113,7 @@ def load(
     )
     apply_factories(sharded_state_dict)
     # Data inside sh_ten_factories no longer needed so delete them to reduce memory usage
-    def unlink_data(x):
-        x.data = None
-        return x
-
-    dict_list_map_inplace(unlink_data, sh_ten_factories)
+    dict_list_map_inplace(ShardedTensorFactory.without_data, sh_ten_factories)
     # Non-persistent objects
     nonpersistent_state_dict, sharded_state_dict = extract_nonpersistent(sharded_state_dict)
     dict_list_map_inplace(lambda o: o.unwrap(), nonpersistent_state_dict)
@@ -127,8 +131,19 @@ def load(
         merge(common_state_dict, sharded_objects)
     sharded_state_dict, _ = extract_sharded_base(sharded_state_dict)
 
+    if validate_access_integrity or not strict:
+        local_metadata, global_metadata = determine_global_metadata(sharded_state_dict)
+        ckpt_sharded_metadata = sharded_strategy.load_tensors_metadata(checkpoint_dir)
+        missing_keys, unexpected_keys = _determine_missing_and_unexpected_keys(ckpt_sharded_metadata, local_metadata, global_metadata)
+
     if validate_access_integrity:
-        validate_sharding_integrity(nested_values(sharded_state_dict))
+        maybe_report_missing_and_unexpected_keys(missing_keys, unexpected_keys, raise_error=True)
+        validate_sharding_integrity(global_metadata)
+
+    if not strict:
+        _adjust_non_strict_load(sharded_state_dict, unexpected_keys)
+        maybe_report_missing_and_unexpected_keys(missing_keys, unexpected_keys, raise_error=False)
+
 
     loaded_state_dict = sharded_strategy.load(sharded_state_dict, checkpoint_dir)
 
@@ -251,6 +266,91 @@ def load_plain_tensors(checkpoint_dir: str):
     return load(sharded_state_dict, checkpoint_dir, validate_access_integrity=False)
 
 
+def _adjust_non_strict_load(
+    sharded_state_dict: ShardedStateDict,
+    unexpected_keys: Set[str],
+):
+    def should_remove_unexpected_keys(x: ShardedBase):
+        assert isinstance(x, ShardedBase), f'Unexpected type {type(x)}'
+        return x.key in unexpected_keys
+
+    _, sharded_state_dict = extract_matching_values(sharded_state_dict,
+                                                    should_remove_unexpected_keys)
+    return sharded_state_dict
+
+
+def _determine_missing_and_unexpected_keys(
+    ckpt_sharded_metadata: ShardedStateDict,
+    local_metadata: LocalMetadata,
+    global_metadata: GlobalMetadata,
+) -> Tuple[Set[str], Set[str]]:
+    """
+    NOTE: asymmetry
+    TODO
+    Args:
+        sharded_state_dict:
+        ckpt_sharded_metadata:
+        local_metadata:
+        global_metadata:
+
+    Returns:
+
+    """
+    global_accessed_keys = set(sh_base.key for rank_metadata in global_metadata for sh_base in rank_metadata
+                               if isinstance(sh_base, ShardedTensor))  # TODO: get rid of the `if` filter
+    local_accessed_keys = set(sh_base.key for sh_base in local_metadata
+                              if isinstance(sh_base, ShardedTensor))  # TODO: get rid of the `if` filter
+    ckpt_keys = set(ckpt_sharded_metadata.keys())
+
+    # TODO: what about ShardedObjects?
+    missing_keys = ckpt_keys - global_accessed_keys
+    unexpected_keys = local_accessed_keys - ckpt_keys
+
+    if missing_keys:
+        logger.warning(f'Dist ckpt load missing keys: {missing_keys}')
+    if unexpected_keys:
+        logger.warning(f'Dist ckpt load unexpected keys: {unexpected_keys}')
+
+    return missing_keys, unexpected_keys
+
+
+def maybe_report_missing_and_unexpected_keys(missing_keys: Set[str], unexpected_keys: Set[str], raise_error: bool = True) -> None:
+    """
+    TODO
+    Args:
+        missing_keys:
+        unexpected_keys:
+        raise_error:
+
+    Returns:
+
+    """
+    if not missing_keys and not unexpected_keys:
+        return
+    missing_title_msg = f'Some keys found in the checkpoint are missing in the provided sharded state dict. '
+    missing_body_msg = f'Missing keys: {missing_keys}. '
+    unexpected_title_msg = f'Unexpected keys (not found in the checkpoint) encountered in the provided sharded state dict. '
+    unexpected_body_msg = f'Unexpected keys: {unexpected_keys}. '
+    err_msg = ''
+    if missing_keys:
+        if raise_error:
+            err_msg += missing_title_msg
+        else:
+            logger.warning(missing_title_msg + missing_body_msg)
+    if unexpected_keys:
+        if raise_error:
+            err_msg += unexpected_title_msg
+        else:
+            logger.warning(unexpected_title_msg + unexpected_body_msg)
+
+    if raise_error:
+        if missing_keys:
+            err_msg += missing_body_msg
+        if unexpected_keys:
+            err_msg += unexpected_body_msg
+        raise CheckpointingException(err_msg)
+
+
 def save(
     sharded_state_dict: ShardedStateDict,
     checkpoint_dir: str,
@@ -335,7 +435,7 @@ def save(
     common_strategy.save_common(state_dict, checkpoint_dir)
 
     if validate_access_integrity:
-        validate_sharding_integrity(list(nested_values(sharded_state_dict)))
+        validate_sharding_integrity(determine_global_metadata(sharded_state_dict)[1])
 
     if not sharded_strategy.can_handle_sharded_objects:
         if not common_strategy.can_handle_sharded_objects:
@@ -384,7 +484,22 @@ def get_default_load_sharded_strategy(checkpoint_dir: str) -> LoadShardedStrateg
     return _verify_checkpoint_and_load_strategy(checkpoint_dir)[0]
 
 
-def validate_sharding_integrity(sharded_tensors: Iterable[ShardedTensor]):
+def determine_global_metadata(sharded_state_dict: ShardedStateDict) -> Tuple[LocalMetadata, GlobalMetadata]:
+    """
+    TODO
+    Args:
+        sharded_state_dict:
+
+    Returns:
+
+    """
+    local_metadata = [ten.without_data() for ten in nested_values(sharded_state_dict)]
+    global_metadata = [None] * torch.distributed.get_world_size()
+    torch.distributed.all_gather_object(global_metadata, local_metadata)
+    return local_metadata, global_metadata
+
+
+def validate_sharding_integrity(global_metadata: GlobalMetadata):
     """ Validate if the ShardedTensors from multiple processes define correct sharding of a global tensor.
 
     Local ShardedTensors metadata is exchanged with `torch.distributed.all_gather_object`
@@ -393,7 +508,7 @@ def validate_sharding_integrity(sharded_tensors: Iterable[ShardedTensor]):
     - don't overlap
 
     Args:
-        sharded_tensors (Iterable[ShardedTensor]): sharded tensors local to this process
+        global_metadata (TODO): sharded tensors local to this process
 
     Returns:
         None
@@ -401,14 +516,11 @@ def validate_sharding_integrity(sharded_tensors: Iterable[ShardedTensor]):
     Raises:
         CheckpointingException for invalid access pattern
     """
-    sharding = [ten.without_data() for ten in sharded_tensors]
-    all_sharding = [None] * torch.distributed.get_world_size()
-    torch.distributed.all_gather_object(all_sharding, sharding)
     if torch.distributed.get_rank() != 0:
         return
 
     key_shardings = defaultdict(list)
-    for rank, rank_shardings in enumerate(all_sharding):
+    for rank, rank_shardings in enumerate(global_metadata):
         for sharding in rank_shardings:
             key_shardings[sharding.key].append((rank, sharding))
     for key, shardings in key_shardings.items():

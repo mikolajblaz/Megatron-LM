@@ -37,6 +37,11 @@ class ShardedBase(ABC):
     def validate_metadata_integrity(self):
         """Codifies the constraints on metadata attributes."""
 
+    @abstractmethod
+    def without_data(self) -> 'ShardedBase':
+        raise NotImplementedError
+
+
 
 @dataclass
 class ShardedTensor(ShardedBase):
@@ -432,6 +437,9 @@ class ShardedTensorFactory(ShardedBase):
     def validate_metadata_integrity(self):
         """No reasonable checks can be applied"""
         pass
+
+    def without_data(self):
+        return replace(self, data=None)
 
 
 def apply_factories(sharded_state_dict: ShardedStateDict):
