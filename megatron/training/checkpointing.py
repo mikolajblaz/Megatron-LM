@@ -20,6 +20,7 @@ from .global_vars import get_args
 from .utils import unwrap_model, print_rank_0, append_to_progress_log
 from ..core.dist_checkpointing.serialization import \
     get_default_save_sharded_strategy
+from ..core.dist_checkpointing.validation import StrictHandling
 
 # [ModelOpt]: Import
 try:
@@ -572,7 +573,7 @@ def _load_base_checkpoint(load_dir, rank0=False, sharded_state_dict=None,
         if args.ckpt_fully_parallel_load:
             load_strategy = FullyParallelLoadStrategyWrapper(load_strategy,
                                                              mpu.get_data_parallel_group(with_context_parallel=True))
-        state_dict = dist_checkpointing.load(sharded_state_dict, checkpoint_name, load_strategy)
+        state_dict = dist_checkpointing.load(sharded_state_dict, checkpoint_name, load_strategy, strict=args.dist_ckpt_non_strict_load)
         return state_dict, checkpoint_name, release
 
     try:

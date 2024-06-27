@@ -1299,6 +1299,10 @@ def _add_checkpointing_args(parser):
                        help='If the model and optimizer state dict structure is'
                             'constant throughout a *single training job*, it allows for'
                             'different checkpointing performance optimizations.')
+    group.add_argument('--dist-ckpt-non-strict-load', action='store_true',
+                       help='Allow non-strict load of a distributed checkpoint.'
+                            'NOTE: This flag controls only distributed checkpoint'
+                            ' load from storage, not loading state dict into the model.')
     return parser
 
 
