@@ -1,7 +1,8 @@
 import logging
 from collections import Counter, defaultdict
+from enum import Enum
 from pathlib import Path
-from typing import List, Set, Tuple, Union
+from typing import TYPE_CHECKING, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import torch
@@ -17,7 +18,6 @@ from megatron.core.dist_checkpointing.mapping import (
     ShardedBase,
     ShardedObject,
     ShardedStateDict,
-    ShardedStateDictNoData,
     is_main_replica,
 )
 from megatron.core.dist_checkpointing.strategies.base import (
@@ -29,12 +29,155 @@ from megatron.core.dist_checkpointing.strategies.base import (
     get_default_strategy,
 )
 
+if TYPE_CHECKING:
+    from megatron.core.dist_checkpointing.serialization import CkptShardedMetadata
+
 logger = logging.getLogger(__name__)
 
 # list of local saved/loaded ShardedBase objects
 _LocalMetadata = List[Union[ShardedTensor, ShardedObject]]
 # list of lists of global saved/loaded ShardedBase objects (each list element corresponds to global rank)
 _GlobalMetadata = List[_LocalMetadata]
+
+
+class StrictHandling(Enum):
+    """Determines handling of load mismatch (non-empty "unexpected" or "missing" keys).
+
+    Different flags carry different implications on performance and behaviour and
+    are divided into two groups:
+    - *_UNEXPECTED
+    - *_ALL
+    The first group ignores missing keys (present in the checkpoint but missing
+    in the sharded state dict) which is created in order to avoid inter-rank
+    metadata exchange. Note that the metadata exchange will happen anyway
+    with `load(..., validate_access_integrity=True)` flag in which case using the
+    `*_ALL` option is recommended as it provides a more thorough check with no
+    performance penalty wrt. `*_UNEXPECTED` group.
+
+    All options except for the first one (`ASSUME_OK_UNEXPECTED`) require
+    extra disk access before the load in order to remove unexpected keys
+    from the sharded state dict requested to load.
+    """
+
+    # Relies on the underlying strategy to raise error on unexpected keys
+    ASSUME_OK_UNEXPECTED = True
+    # Logs (with WARNING level) "unexpected" keys. Missing keys are ignored.
+    # This is treated as a reasonable default for a "non-strict" load
+    LOG_UNEXPECTED = False
+    # Logs (with WARNING level) all mismatched keys.
+    LOG_ALL = 2
+    # Raise error on unexpected keys before load attempt.
+    # Gives cleaner error message than `ASSUME_OK_UNEXPECTED` but requires
+    # extra disk access.
+    RAISE_UNEXPECTED = 3
+    # Raise error on any mismatch. Similar to `RAISE_UNEXPECTED` but requires
+    # metadata exchange.
+    RAISE_ALL = 4
+    # "Unexpected" mismatches are not reported, but returned by the `load`
+    # function along with the loaded state dict. Missing keys are ignored.
+    RETURN_UNEXPECTED = 5
+    # All mismatches are returned along with the loaded state dict.
+    RETURN_ALL = 6
+    # Simply ignores mismatches (not recommended)
+    IGNORE_ALL = 7
+
+    @staticmethod
+    def requires_explicit_ckpt_mismatch_check(val: 'StrictHandling') -> bool:
+        """ Whether a given strict flag involves mismatch check against the checkpoint. """
+        return val != StrictHandling.ASSUME_OK_UNEXPECTED
+
+    @staticmethod
+    def requires_global_app_metadata(val: 'StrictHandling') -> bool:
+        """ Whether a given strict option requires global metadata for validation. """
+        return val in (
+            StrictHandling.IGNORE_ALL,
+            StrictHandling.RAISE_ALL,
+            StrictHandling.RETURN_ALL,
+            StrictHandling.LOG_ALL,
+        )
+
+    @staticmethod
+    def requires_returning_mismatch_keys(val: 'StrictHandling') -> bool:
+        """ Whether a given strict option results in extra return value from the `load` function. """
+        return val in (StrictHandling.RETURN_UNEXPECTED, StrictHandling.RETURN_ALL,)
+
+
+def validate_integrity_and_strict_load(
+    sharded_state_dict: ShardedStateDict,
+    strict: StrictHandling,
+    validate_access_integrity: bool,
+    local_metadata: Optional[_LocalMetadata] = None,
+    global_metadata: Optional[_GlobalMetadata] = None,
+    ckpt_sharded_metadata: Optional['CkptShardedMetadata'] = None,
+) -> Tuple[ShardedStateDict, Set[str], Set[str]]:
+    """ Validates sharding integrity and potential mismatches with the checkpoint.
+
+    `validate_access_integrity` controls sharding integrity check (orthogonal
+    to strictness checking) which verifies `sharded_state_dict` runtime completeness
+    (in isolation from the actual checkpoint).
+
+    `strict` flag controls handling of mismatches between the requested
+    sharded state dict to load and the actual checkpoint. See `StrictHandling`
+    docs for details regarding flag behavior and performance implications
+    (disk interactions or inter-rank communication).
+
+    Args:
+        sharded_state_dict (ShardedStateDict): sharded state dict to verify.
+        strict (StrictHandling): flag determining how to handle sharded keys mismatch.
+        validate_access_integrity (bool): whether to perform sharding validation.
+        local_metadata (_LocalMetadata, optional): local sharded state dict metadata.
+            Defaults to None, in which case it's determined based on `sharded_state_dict`.
+        global_metadata (_GlobalMetadata, optional): global sharded state dict metadata
+            (exchanged between ranks). Defaults to None, in which case "missing"
+            keys are not determined.
+        ckpt_sharded_metadata (CkptShardedMetadata, optional): sharded metadata
+            from the checkpoint. Defaults to None, which only makes sense
+            for the `StrictHandling.ASSUME_OK_UNEXPECTED` strict value.
+
+    Returns:
+        Tuple[ShardedStateDict, Set[str], Set[str]]: tuple of: sharded state dict
+            without unexpected keys, missing and unexpected keys. Missing keys are equal
+            on all ranks, unexpected keys might differ across ranks. Additionally,
+            missing keys might be erroneously empty (depending on `strict` value).
+    """
+    missing_keys, unexpected_keys = [], []
+    if StrictHandling.requires_explicit_ckpt_mismatch_check(strict):
+        if ckpt_sharded_metadata is None:
+            raise CheckpointingException(
+                'Cannot verify checkpoint mismatch with ckpt_sharded_metadata=None.'
+            )
+        if local_metadata is None:
+            local_metadata = [
+                sh_base.without_data() for sh_base in nested_values(sharded_state_dict)
+            ]
+        # We don't want to check for missing keys even if we could
+        _skip_missing_keys = strict in (
+            StrictHandling.ASSUME_OK_UNEXPECTED,
+            StrictHandling.LOG_UNEXPECTED,
+            StrictHandling.RAISE_UNEXPECTED,
+            StrictHandling.RETURN_UNEXPECTED,
+        )
+        missing_keys, unexpected_keys = _determine_missing_and_unexpected_keys(
+            ckpt_sharded_metadata, local_metadata, None if _skip_missing_keys else global_metadata
+        )
+
+        sharded_state_dict = adjust_non_strict_load(sharded_state_dict, unexpected_keys)
+
+        if strict == StrictHandling.IGNORE_ALL:
+            missing_keys, unexpected_keys = [], []
+        elif strict in (StrictHandling.RAISE_UNEXPECTED, StrictHandling.RAISE_ALL):
+            maybe_report_missing_and_unexpected_keys(missing_keys, unexpected_keys, True)
+        elif strict in (StrictHandling.LOG_UNEXPECTED, StrictHandling.LOG_ALL):
+            maybe_report_missing_and_unexpected_keys(missing_keys, unexpected_keys, False)
+
+    if validate_access_integrity:
+        if global_metadata is None:
+            raise CheckpointingException(
+                'Cannot check sharding intergrity without global_metadata (None).'
+            )
+        validate_sharding_integrity(global_metadata)
+
+    return sharded_state_dict, missing_keys, unexpected_keys
 
 
 def verify_checkpoint_and_load_strategy(
@@ -90,7 +233,7 @@ def verify_checkpoint_and_load_strategy(
 def adjust_non_strict_load(
     sharded_state_dict: ShardedStateDict, sharded_keys_to_remove: Set[str],
 ) -> ShardedStateDict:
-    """ Adjusts state dict in-place removing keys not existing in the checkpoint.
+    """ Adjusts sharded state dict removing keys not existing in the checkpoint.
 
     Args:
         sharded_state_dict (ShardedStateDict): sharded state dict to modify
@@ -109,9 +252,9 @@ def adjust_non_strict_load(
 
 
 def _determine_missing_and_unexpected_keys(
-    ckpt_sharded_metadata: ShardedStateDictNoData,
+    ckpt_sharded_metadata: 'CkptShardedMetadata',
     local_metadata: _LocalMetadata,
-    global_metadata: _GlobalMetadata,
+    global_metadata: Optional[_GlobalMetadata] = None,
 ) -> Tuple[Set[str], Set[str]]:
     """ Determines load mismatches based on metadata.
 
@@ -123,25 +266,30 @@ def _determine_missing_and_unexpected_keys(
     "missing_keys" are equal, but "unexpected_keys" might differ across ranks.
 
     Args:
-        ckpt_sharded_metadata (ShardedStateDictNoData): sharded state dict (without data)
+        ckpt_sharded_metadata (CkptShardedMetadata): sharded state dict (without data)
             constructed based on the checkpoint content
         local_metadata (_LocalMetadata): list of local ShardedBase objects
             requested to be loaded by this rank
-        global_metadata (_GlobalMetadata): list of global ShardedBase objects
-            requested to be loaded by all ranks
+        global_metadata (_GlobalMetadata, optional): list of global ShardedBase objects
+            requested to be loaded by all ranks. Defaults to None, in which case
+            returned "missing" keys are empty.
 
     Returns:
         Tuple[Set[str], Set[str]]: missing and unexpected keys. Missing keys are equal
-            on all ranks, unexpected keys might differ across ranks.
+            on all ranks, unexpected keys might differ across ranks. If passed
+            `global_metadata` is empty, returned missing keys are empty as well.
+
     """
-    global_accessed_keys = set(
-        sh_base.key for rank_metadata in global_metadata for sh_base in rank_metadata
-    )
     local_accessed_keys = set(sh_base.key for sh_base in local_metadata)
     ckpt_keys = set(sh_base.key for sh_base in ckpt_sharded_metadata.values())
-
-    missing_keys = ckpt_keys - global_accessed_keys
     unexpected_keys = local_accessed_keys - ckpt_keys
+    if global_metadata is not None:
+        global_accessed_keys = set(
+            sh_base.key for rank_metadata in global_metadata for sh_base in rank_metadata
+        )
+        missing_keys = ckpt_keys - global_accessed_keys
+    else:
+        missing_keys = set()
 
     if missing_keys:
         logger.debug(f'Dist ckpt load missing keys: {missing_keys}')
@@ -154,15 +302,20 @@ def _determine_missing_and_unexpected_keys(
 def maybe_report_missing_and_unexpected_keys(
     missing_keys: Set[str], unexpected_keys: Set[str], raise_error: bool = True
 ) -> None:
-    """
-    TODO rethink
+    """ Raises or logs an error in case missing or unexpected keys are non-empty.
+
     Args:
-        missing_keys:
-        unexpected_keys:
-        raise_error:
+        missing_keys (Set[str]): missing keys in the state dict
+        unexpected_keys (Set[str]): unexpected keys in the state dict
+        raise_error: If True, raises error on mismatch. Otherwise, logs mismatch
+            with WARNING level.
 
     Returns:
+        None
 
+    Raises:
+        CheckpointingException: if `raise_error` is True and at least one of
+        `missing_keys` or `unexpected_keys` are non-empty.
     """
     if not missing_keys and not unexpected_keys:
         return
@@ -172,21 +325,22 @@ def maybe_report_missing_and_unexpected_keys(
     missing_body_msg = f'Missing keys (for all ranks): {missing_keys}. '
     unexpected_title_msg = f'Unexpected keys (not found in the checkpoint) encountered in the provided sharded state dict. '
     unexpected_body_msg = f'Unexpected keys (for this rank): {unexpected_keys}. '
+    error_msg = ''
     if missing_keys:
-        _missing_msg = missing_title_msg + missing_body_msg
-        if raise_error:
-            _missing_msg += (
-                ' NOTE: This warning will become an error in MCore v0.9.'
-                ' Make sure to provide a sharded_state_dict covering the whole checkpoint,'
-                ' or set `dist_checkpointing.load(..., strict=False)` flag'
-            )
-        logger.warning(_missing_msg)
+        error_msg += missing_title_msg
     if unexpected_keys:
-        _unexpected_msg = unexpected_title_msg + unexpected_body_msg
-        if raise_error:
-            raise CheckpointingException(_unexpected_msg)
-        else:
-            logger.warning(_unexpected_msg)
+        error_msg += unexpected_title_msg
+
+    error_msg += '\n'
+    if missing_keys:
+        error_msg += missing_body_msg
+    if unexpected_keys:
+        error_msg += unexpected_body_msg
+
+    if raise_error:
+        raise CheckpointingException(error_msg)
+    else:
+        logger.warning(error_msg)
 
 
 def validate_sharding_integrity(global_metadata: _GlobalMetadata) -> None:

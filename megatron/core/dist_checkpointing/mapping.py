@@ -25,10 +25,6 @@ logger = logging.getLogger(__name__)
 #  (ShardedStateDict).
 StateDict = Dict[str, Any]
 ShardedStateDict = Dict[str, Any]
-
-# flat sharded state without any data (e.g. the result of calling `.without_data` on each ShardedBase object)
-LocalShardedMetadata = Dict[str, Union['ShardedTensor', 'ShardedObject']]
-# Possible replica_id types
 ReplicaId = Union[int, Tuple[int, ...]]
 
 

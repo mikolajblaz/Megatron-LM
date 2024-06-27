@@ -9,17 +9,17 @@ Additionally, `load` expects the sharded state dict argument as a guidance for l
 
 import logging
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Set, Tuple, Union
 
 import torch
 
+from . import ShardedTensor
 from .core import CheckpointingConfig, save_config
 from .dict_utils import dict_list_map_inplace, extract_matching_values, merge
 from .mapping import (
     CheckpointingException,
     ShardedObject,
     ShardedStateDict,
-    LocalShardedMetadata,
     ShardedTensorFactory,
     StateDict,
     apply_factories,
@@ -37,16 +37,19 @@ from .strategies.base import (
 )
 from .utils import extract_nonpersistent, extract_sharded_base
 from .validation import (
-    _determine_missing_and_unexpected_keys,
-    adjust_non_strict_load,
+    StrictHandling,
     determine_global_metadata,
-    maybe_report_missing_and_unexpected_keys,
+    validate_integrity_and_strict_load,
     validate_sharded_objects_handling,
     validate_sharding_integrity,
-    verify_checkpoint_and_load_strategy, StrictHandling,
+    verify_checkpoint_and_load_strategy,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# flat state dict with sharded objects without any data
+CkptShardedMetadata = Dict[str, Union[ShardedTensor, ShardedObject]]
 
 
 def load(
@@ -55,8 +58,8 @@ def load(
     sharded_strategy: Union[LoadShardedStrategy, Tuple[str, int], None] = None,
     common_strategy: Union[LoadCommonStrategy, Tuple[str, int], None] = None,
     validate_access_integrity: bool = True,
-    strict: StrictHandling = True,
-) -> StateDict:
+    strict: StrictHandling = StrictHandling.ASSUME_OK_UNEXPECTED,
+) -> Union[StateDict, Tuple[StateDict, Set[str], Set[str]]]:
     """Loading entrypoint.
 
     In the steps below, the following verbs refer to corresponding objects:
@@ -79,8 +82,18 @@ def load(
         common_strategy (LoadCommonStrategy, Tuple[str, int], optional): configures loading behavior for common data
         validate_access_integrity (bool default = True): checks if each tensor shard is accessed
             exactly once (as main replica) by some process
-        strict (bool, optional): If False, unexpected or missing keys to load will be ignored
-            and reported back as part of the return value. Defaults to True.
+        strict (StrictHandling, optional): determines the behavior in case of a mismatch
+            between the requested sharded state dict and the checkpoint. See `StrictHandling` docs
+            for more details. Some values affect the return value of this function
+            (missing and unexpected keys are returned).
+            Defaults to `True` (StrictHandling.ASSUME_OK_UNEXPECTED) which doesn't
+            incur any performance overhead. Other recommended values
+            are: `False` (StrictHandling.LOG_UNEXPECTED) which logs only unexpected keys
+            or `StrictHandling.RETURN_ALL` which returns all mismatch keys.
+
+    Returns:
+        StateDict or Tuple[StateDict, Set[str], Set[str]]: in most cases only
+            the loaded state dict is returned. If `strict` flag was set to
     """
     sharded_strategy, common_strategy = verify_checkpoint_and_load_strategy(
         checkpoint_dir, sharded_strategy, common_strategy
@@ -120,40 +133,33 @@ def load(
         merge(common_state_dict, sharded_objects)
     sharded_state_dict, _ = extract_sharded_base(sharded_state_dict)
 
-    if validate_access_integrity or not strict:
+    ckpt_sharded_metadata = None
+    local_metadata, global_metadata = None, None
+    if StrictHandling.requires_explicit_ckpt_mismatch_check(strict):
+        ckpt_sharded_metadata = load_sharded_metadata(
+            str(checkpoint_dir), sharded_strategy, common_strategy
+        )
+    if validate_access_integrity or StrictHandling.requires_global_app_metadata(strict):
         local_metadata, global_metadata = determine_global_metadata(sharded_state_dict)
-        try:
-            _load_sharded_metadata_not_implemented = False
-            ckpt_sharded_metadata = sharded_strategy.load_sharded_metadata(checkpoint_dir)
-        except NotImplementedError:
-            logger.warning(
-                'Sharded strategy must implement a `load_sharded_metadata` method in order to verify load correctness.'
-                ' Skipping verification.'
-                ' NOTE: This warning will become an error in MCore v0.9'
-            )
-            _load_sharded_metadata_not_implemented = True
 
-        if _load_sharded_metadata_not_implemented:
-            missing_keys, unexpected_keys = [], []
-        else:
-            missing_keys, unexpected_keys = _determine_missing_and_unexpected_keys(
-                ckpt_sharded_metadata, local_metadata, global_metadata
-            )
-
-    if validate_access_integrity:
-        maybe_report_missing_and_unexpected_keys(missing_keys, unexpected_keys, raise_error=True)
-        validate_sharding_integrity(global_metadata)
-
-    if not strict:
-        adjust_non_strict_load(sharded_state_dict, unexpected_keys)
-        maybe_report_missing_and_unexpected_keys(missing_keys, unexpected_keys, raise_error=False)
+    sharded_state_dict, missing_keys, unexpected_keys = validate_integrity_and_strict_load(
+        sharded_state_dict,
+        strict,
+        validate_access_integrity,
+        local_metadata,
+        global_metadata,
+        ckpt_sharded_metadata,
+    )
 
     loaded_state_dict = sharded_strategy.load(sharded_state_dict, checkpoint_dir)
 
     loaded_state_dict = apply_factory_merges(loaded_state_dict, sh_ten_factories)
 
     merge(common_state_dict, loaded_state_dict)
-    return common_state_dict
+    if StrictHandling.requires_returning_mismatch_keys(strict):
+        return common_state_dict, missing_keys, unexpected_keys
+    else:
+        return common_state_dict
 
 
 def load_common_state_dict(checkpoint_dir: Path) -> StateDict:
@@ -170,9 +176,8 @@ def load_common_state_dict(checkpoint_dir: Path) -> StateDict:
 
 
 def load_tensors_metadata(
-    checkpoint_dir: str,
-    sharded_strategy: Union[LoadShardedStrategy, None] = None,
-) -> LocalShardedMetadata:
+    checkpoint_dir: str, sharded_strategy: Union[LoadShardedStrategy, None] = None,
+) -> CkptShardedMetadata:
     """Load tensors metadata from the checkpoint.
 
     Returns a dictionary similar to a sharded state dict, but note that
@@ -191,7 +196,7 @@ def load_tensors_metadata(
             Defaults to None - in this case a default load strategy for a given checkpoint type is used.
 
     Returns:
-        LocalShardedMetadata: flat state dict without data describing ShardedTensors in the checkpoint
+        CkptShardedMetadata: flat state dict without data describing ShardedTensors in the checkpoint
     """
     sharded_strategy, common_strategy = verify_checkpoint_and_load_strategy(
         checkpoint_dir, sharded_strategy
@@ -203,7 +208,7 @@ def load_sharded_metadata(
     checkpoint_dir: str,
     sharded_strategy: Union[LoadShardedStrategy, None] = None,
     common_strategy: Union[LoadCommonStrategy, None] = None,
-) -> LocalShardedMetadata:
+) -> CkptShardedMetadata:
     """Load sharded metadata from the checkpoint.
 
     Similar to `load_tensors_metadata`, but includes also ShardedObjects.
@@ -227,7 +232,7 @@ def load_sharded_metadata(
             This strategy won't be used unless `sharded_strategy` can't handle ShardedObjects
 
     Returns:
-        LocalShardedMetadata: flat state dict without data describing ShardedTensors
+        CkptShardedMetadata: flat state dict without data describing ShardedTensors
             and ShardedObjects in the checkpoint
     """
     sharded_strategy, common_strategy = verify_checkpoint_and_load_strategy(
@@ -256,6 +261,25 @@ def load_plain_tensors(checkpoint_dir: str) -> StateDict:
     # Don't validate integrity because shards will be overlapped
     # if world_size > 1 (all processes load whole tensors)
     return load(sharded_state_dict, checkpoint_dir, validate_access_integrity=False)
+
+
+#
+# def load_plain_tensors_and_objects(checkpoint_dir: str) -> StateDict:
+#     """Load checkpoint tensors and objects without any sharding and plain structure.
+#
+#     NOTE: state dict structure might be different than the one used for checkpoint saving.
+#     NOTE: common state dict is NOT included.
+#
+#     Args:
+#         checkpoint_dir (str): checkpoint directory to load the state dict from.
+#
+#     Returns:
+#         StateDict: complete checkpoint state dict without any sharding.
+#     """
+#     sharded_state_dict = load_tensors_metadata(checkpoint_dir)
+#     # Don't validate integrity because shards will be overlapped
+#     # if world_size > 1 (all processes load whole tensors)
+#     return load(sharded_state_dict, checkpoint_dir, validate_access_integrity=False)
 
 
 def save(
