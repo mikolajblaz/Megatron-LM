@@ -9,19 +9,16 @@ from pathlib import Path
 
 import torch
 
-from megatron.core.dist_checkpointing.mapping import StateDict, ShardedStateDict
-from megatron.core.dist_checkpointing.strategies.base import SaveCommonStrategy, \
-    StrategyAction, default_strategies
-from ..dict_utils import (
-    dict_list_map_inplace,
-    nested_values, )
-from ..mapping import (
-    CheckpointingException,
-    ShardedObject,
-    is_main_replica, )
-from ..strategies.base import (
-    LoadCommonStrategy,
+from megatron.core.dist_checkpointing.mapping import ShardedStateDict, StateDict
+from megatron.core.dist_checkpointing.strategies.base import (
+    SaveCommonStrategy,
+    StrategyAction,
+    default_strategies,
 )
+
+from ..dict_utils import dict_list_map_inplace, nested_values
+from ..mapping import CheckpointingException, ShardedObject, is_main_replica
+from ..strategies.base import LoadCommonStrategy
 
 _import_trigger = None
 
@@ -31,13 +28,13 @@ logger = logging.getLogger(__name__)
 
 
 class TorchCommonSaveStrategy(SaveCommonStrategy):
-
     def save_common(self, common_state_dict: StateDict, checkpoint_dir: Path):
         if torch.distributed.get_rank() == 0:
             torch.save(common_state_dict, checkpoint_dir / COMMON_STATE_FNAME)
 
-    def save_sharded_objects(self, sharded_objects_state_dict: ShardedStateDict,
-                             checkpoint_dir: Path):
+    def save_sharded_objects(
+        self, sharded_objects_state_dict: ShardedStateDict, checkpoint_dir: Path
+    ):
 
         for sh_obj in nested_values(sharded_objects_state_dict):
             if is_main_replica(sh_obj.replica_id):
@@ -50,7 +47,6 @@ class TorchCommonSaveStrategy(SaveCommonStrategy):
 
 
 class TorchCommonLoadStrategy(LoadCommonStrategy):
-
     def load_common(self, checkpoint_dir: Path):
         """ Load common (non-sharded) objects state dict from the checkpoint.
 
@@ -69,8 +65,9 @@ class TorchCommonLoadStrategy(LoadCommonStrategy):
             logger.debug(f'{err_msg}. Checkpoint directory content: {ckpt_files}')
             raise CheckpointingException(err_msg) from e
 
-    def load_sharded_objects(self, sharded_objects_state_dict: ShardedStateDict,
-                             checkpoint_dir: Path):
+    def load_sharded_objects(
+        self, sharded_objects_state_dict: ShardedStateDict, checkpoint_dir: Path
+    ):
         """ Replaces all ShardedObject from a given state dict with values loaded from the checkpoint.
 
         Args:
@@ -128,4 +125,6 @@ class TorchCommonLoadStrategy(LoadCommonStrategy):
 
 
 default_strategies[StrategyAction.LOAD_COMMON.value][('torch', 1)] = TorchCommonLoadStrategy()
-default_strategies[StrategyAction.SAVE_COMMON.value][('torch', 1)] = TorchCommonSaveStrategy('torch', 1)
+default_strategies[StrategyAction.SAVE_COMMON.value][('torch', 1)] = TorchCommonSaveStrategy(
+    'torch', 1
+)

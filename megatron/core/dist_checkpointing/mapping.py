@@ -42,7 +42,6 @@ class ShardedBase(ABC):
         raise NotImplementedError
 
 
-
 @dataclass
 class ShardedTensor(ShardedBase):
     """Represents a mapping between a local tensor and a global tensor.

@@ -84,7 +84,9 @@ class LoadCommonStrategy(LoadStrategyBase):
         raise NotImplementedError
 
     @abstractmethod
-    def load_sharded_objects(self, sharded_objects_state_dict: ShardedStateDict, checkpoint_dir: Path):
+    def load_sharded_objects(
+        self, sharded_objects_state_dict: ShardedStateDict, checkpoint_dir: Path
+    ):
         raise NotImplementedError
 
     def load_sharded_metadata(self, checkpoint_dir: Path) -> ShardedStateDict:
@@ -139,7 +141,9 @@ class SaveCommonStrategy(SaveStrategyBase):
     def save_common(self, common_state_dict: StateDict, checkpoint_dir: Path):
         raise NotImplementedError
 
-    def save_sharded_objects(self, sharded_objects_state_dict: ShardedStateDict, checkpoint_dir: Path):
+    def save_sharded_objects(
+        self, sharded_objects_state_dict: ShardedStateDict, checkpoint_dir: Path
+    ):
         raise NotImplementedError
 
 

@@ -10,7 +10,7 @@ Additionally, `load` expects the sharded state dict argument as a guidance for l
 import logging
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import List, Optional, Tuple, Union, Set
+from typing import List, Optional, Set, Tuple, Union
 
 import numpy as np
 import torch
@@ -25,6 +25,7 @@ from .dict_utils import (
 )
 from .mapping import (
     CheckpointingException,
+    ShardedBase,
     ShardedObject,
     ShardedStateDict,
     ShardedTensor,
@@ -33,7 +34,6 @@ from .mapping import (
     apply_factories,
     apply_factory_merges,
     is_main_replica,
-    ShardedBase,
 )
 from .strategies.async_utils import AsyncRequest
 from .strategies.base import (
@@ -45,10 +45,7 @@ from .strategies.base import (
     StrategyAction,
     get_default_strategy,
 )
-from .utils import (
-    extract_nonpersistent,
-    extract_sharded_base,
-)
+from .utils import extract_nonpersistent, extract_sharded_base
 
 # TODO
 LocalMetadata = List[Union[ShardedTensor, ShardedObject]]
@@ -90,7 +87,9 @@ def load(
         strict (bool, optional): If False, unexpected or missing keys to load will be ignored
             and reported back as part of the return value. Defaults to True.
     """
-    sharded_strategy, common_strategy = _verify_checkpoint_and_load_strategy(checkpoint_dir, sharded_strategy, common_strategy)
+    sharded_strategy, common_strategy = _verify_checkpoint_and_load_strategy(
+        checkpoint_dir, sharded_strategy, common_strategy
+    )
 
     checkpoint_dir = Path(checkpoint_dir)
     common_state_dict = common_strategy.load_common(checkpoint_dir)
@@ -120,7 +119,9 @@ def load(
         sharded_objects_state_dict, sharded_state_dict = extract_matching_values(
             sharded_state_dict, lambda v: isinstance(v, ShardedObject)
         )
-        sharded_objects = common_strategy.load_sharded_objects(sharded_objects_state_dict, checkpoint_dir)
+        sharded_objects = common_strategy.load_sharded_objects(
+            sharded_objects_state_dict, checkpoint_dir
+        )
         merge(common_state_dict, sharded_objects)
     sharded_state_dict, _ = extract_sharded_base(sharded_state_dict)
 
@@ -130,15 +131,19 @@ def load(
             _load_sharded_metadata_not_implemented = False
             ckpt_sharded_metadata = sharded_strategy.load_sharded_metadata(checkpoint_dir)
         except NotImplementedError:
-            logger.warning('Sharded strategy must implement a `load_sharded_metadata` method in order to verify load correctness.'
-                           ' Skipping verification.'
-                           ' NOTE: This warning will become an error in MCore v0.9')
+            logger.warning(
+                'Sharded strategy must implement a `load_sharded_metadata` method in order to verify load correctness.'
+                ' Skipping verification.'
+                ' NOTE: This warning will become an error in MCore v0.9'
+            )
             _load_sharded_metadata_not_implemented = True
 
         if _load_sharded_metadata_not_implemented:
             missing_keys, unexpected_keys = [], []
         else:
-            missing_keys, unexpected_keys = _determine_missing_and_unexpected_keys(ckpt_sharded_metadata, local_metadata, global_metadata)
+            missing_keys, unexpected_keys = _determine_missing_and_unexpected_keys(
+                ckpt_sharded_metadata, local_metadata, global_metadata
+            )
 
     if validate_access_integrity:
         maybe_report_missing_and_unexpected_keys(missing_keys, unexpected_keys, raise_error=True)
@@ -147,7 +152,6 @@ def load(
     if not strict:
         _adjust_non_strict_load(sharded_state_dict, unexpected_keys)
         maybe_report_missing_and_unexpected_keys(missing_keys, unexpected_keys, raise_error=False)
-
 
     loaded_state_dict = sharded_strategy.load(sharded_state_dict, checkpoint_dir)
 
@@ -158,8 +162,9 @@ def load(
 
 
 def _verify_checkpoint_and_load_strategy(
-    checkpoint_dir: str, sharded_strategy: Union[LoadShardedStrategy, Tuple[str, int], None] = None,
-    common_strategy: Union[LoadCommonStrategy, Tuple[str, int], None] = None
+    checkpoint_dir: str,
+    sharded_strategy: Union[LoadShardedStrategy, Tuple[str, int], None] = None,
+    common_strategy: Union[LoadCommonStrategy, Tuple[str, int], None] = None,
 ) -> Tuple[LoadShardedStrategy, LoadCommonStrategy]:
     """ Verifies if checkpoint metadata exists and matches given strategy.
 
@@ -226,7 +231,9 @@ def load_tensors_metadata(
     Concrete implementation depends on the loading strategy. If no strategy is
     given, a default for a given backend is used.
     """
-    sharded_strategy, common_strategy = _verify_checkpoint_and_load_strategy(checkpoint_dir, sharded_strategy)
+    sharded_strategy, common_strategy = _verify_checkpoint_and_load_strategy(
+        checkpoint_dir, sharded_strategy
+    )
     return sharded_strategy.load_tensors_metadata(Path(checkpoint_dir))
 
 
@@ -248,7 +255,9 @@ def load_sharded_metadata(
     Concrete implementation depends on the loading strategy. If no strategy is
     given, a default for a given backend is used.
     """
-    sharded_strategy, common_strategy = _verify_checkpoint_and_load_strategy(checkpoint_dir, sharded_strategy)
+    sharded_strategy, common_strategy = _verify_checkpoint_and_load_strategy(
+        checkpoint_dir, sharded_strategy
+    )
     sharded_metadata = sharded_strategy.load_sharded_metadata(Path(checkpoint_dir))
     if not sharded_strategy.can_handle_sharded_objects:
         _validate_sharded_objects_handling(sharded_strategy, common_strategy)
@@ -268,15 +277,15 @@ def load_plain_tensors(checkpoint_dir: str):
 
 
 def _adjust_non_strict_load(
-    sharded_state_dict: ShardedStateDict,
-    unexpected_keys: Set[str],
+    sharded_state_dict: ShardedStateDict, unexpected_keys: Set[str],
 ):
     def should_remove_unexpected_keys(x: ShardedBase):
         assert isinstance(x, ShardedBase), f'Unexpected type {type(x)}'
         return x.key in unexpected_keys
 
-    _, sharded_state_dict = extract_matching_values(sharded_state_dict,
-                                                    should_remove_unexpected_keys)
+    _, sharded_state_dict = extract_matching_values(
+        sharded_state_dict, should_remove_unexpected_keys
+    )
     return sharded_state_dict
 
 
@@ -297,7 +306,9 @@ def _determine_missing_and_unexpected_keys(
     Returns:
 
     """
-    global_accessed_keys = set(sh_base.key for rank_metadata in global_metadata for sh_base in rank_metadata)
+    global_accessed_keys = set(
+        sh_base.key for rank_metadata in global_metadata for sh_base in rank_metadata
+    )
     local_accessed_keys = set(sh_base.key for sh_base in local_metadata)
     ckpt_keys = set(sh_base.key for sh_base in ckpt_sharded_metadata.values())
 
@@ -312,7 +323,9 @@ def _determine_missing_and_unexpected_keys(
     return missing_keys, unexpected_keys
 
 
-def maybe_report_missing_and_unexpected_keys(missing_keys: Set[str], unexpected_keys: Set[str], raise_error: bool = True) -> None:
+def maybe_report_missing_and_unexpected_keys(
+    missing_keys: Set[str], unexpected_keys: Set[str], raise_error: bool = True
+) -> None:
     """
     TODO
     Args:
@@ -325,16 +338,20 @@ def maybe_report_missing_and_unexpected_keys(missing_keys: Set[str], unexpected_
     """
     if not missing_keys and not unexpected_keys:
         return
-    missing_title_msg = f'Some keys found in the checkpoint are missing in the provided sharded state dict. '
+    missing_title_msg = (
+        f'Some keys found in the checkpoint are missing in the provided sharded state dict. '
+    )
     missing_body_msg = f'Missing keys (for all ranks): {missing_keys}. '
     unexpected_title_msg = f'Unexpected keys (not found in the checkpoint) encountered in the provided sharded state dict. '
     unexpected_body_msg = f'Unexpected keys (for this rank): {unexpected_keys}. '
     if missing_keys:
         _missing_msg = missing_title_msg + missing_body_msg
         if raise_error:
-            _missing_msg += (' NOTE: This warning will become an error in MCore v0.9.'
-                             ' Make sure to provide a sharded_state_dict covering the whole checkpoint,'
-                             ' or set `dist_checkpointing.load(..., strict=False)` flag')
+            _missing_msg += (
+                ' NOTE: This warning will become an error in MCore v0.9.'
+                ' Make sure to provide a sharded_state_dict covering the whole checkpoint,'
+                ' or set `dist_checkpointing.load(..., strict=False)` flag'
+            )
         logger.warning(_missing_msg)
     if unexpected_keys:
         _unexpected_msg = unexpected_title_msg + unexpected_body_msg
@@ -345,8 +362,8 @@ def maybe_report_missing_and_unexpected_keys(missing_keys: Set[str], unexpected_
 
 
 def _validate_sharded_objects_handling(
-        sharded_strategy: Union[SaveShardedStrategy, LoadShardedStrategy],
-        common_strategy: Union[SaveCommonStrategy, LoadCommonStrategy],
+    sharded_strategy: Union[SaveShardedStrategy, LoadShardedStrategy],
+    common_strategy: Union[SaveCommonStrategy, LoadCommonStrategy],
 ) -> None:
     """ Checks is either of the passed strategies can handle sharded objects.
 
@@ -360,9 +377,14 @@ def _validate_sharded_objects_handling(
     Raises:
         CheckpointingException: if both strategies can't handle ShardedObjects
     """
-    if not sharded_strategy.can_handle_sharded_objects and not common_strategy.can_handle_sharded_objects:
-        raise CheckpointingException(f'Either sharded strategy or common strategy must implement ShardedObjects handling.'
-                                     f' Both {sharded_strategy} and {common_strategy} specify can_handle_sharded_objects=False')
+    if (
+        not sharded_strategy.can_handle_sharded_objects
+        and not common_strategy.can_handle_sharded_objects
+    ):
+        raise CheckpointingException(
+            f'Either sharded strategy or common strategy must implement ShardedObjects handling.'
+            f' Both {sharded_strategy} and {common_strategy} specify can_handle_sharded_objects=False'
+        )
 
 
 def save(
@@ -496,7 +518,9 @@ def get_default_load_sharded_strategy(checkpoint_dir: str) -> LoadShardedStrateg
     return _verify_checkpoint_and_load_strategy(checkpoint_dir)[0]
 
 
-def determine_global_metadata(sharded_state_dict: ShardedStateDict) -> Tuple[LocalMetadata, GlobalMetadata]:
+def determine_global_metadata(
+    sharded_state_dict: ShardedStateDict,
+) -> Tuple[LocalMetadata, GlobalMetadata]:
     """
     TODO
     Args:

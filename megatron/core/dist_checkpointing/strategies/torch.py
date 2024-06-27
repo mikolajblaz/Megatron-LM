@@ -19,6 +19,7 @@ from torch.distributed._shard.metadata import ShardMetadata
 from torch.distributed._shard.sharded_tensor import Shard, ShardedTensorMetadata, TensorProperties
 from torch.distributed._sharded_tensor import ShardedTensor as TorchShardedTensor
 from torch.distributed.checkpoint import (
+    BytesStorageMetadata,
     DefaultLoadPlanner,
     DefaultSavePlanner,
     FileSystemReader,
@@ -26,7 +27,7 @@ from torch.distributed.checkpoint import (
     Metadata,
     SavePlan,
     TensorStorageMetadata,
-    WriteItem, Metadata, BytesStorageMetadata,
+    WriteItem,
 )
 from torch.distributed.checkpoint._nested_dict import FLATTEN_MAPPING, unflatten_state_dict
 from torch.distributed.checkpoint._traverse import OBJ_PATH, traverse_state_dict
