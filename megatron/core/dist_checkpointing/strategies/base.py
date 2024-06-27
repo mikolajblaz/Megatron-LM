@@ -104,34 +104,33 @@ class LoadShardedStrategy(LoadStrategyBase):
 
     @abstractmethod
     def load_tensors_metadata(self, checkpoint_dir: Path):
-        """Load tensors metadata from the checkpoint.
+        """Load tensors metadata from the checkpoint for ShardedTensors.
 
         Returns a dictionary similar to a sharded state dict, but note that
         the dictionary keys are simply ShardedTensor keys (contrary to the
         actual sharded state dicts where keys correspond to state dict keys).
 
-        Dict values are ShardedTensors without any sharding (so, the only useful
-        information is tensors global shape and dtype).
+        Dict values are ShardedTensors without any data and sharding (so, the
+        only useful information is tensors global shape and dtype).
         """
         raise NotImplementedError(
-            f'{self.__class__.__name__} doesnt allow loading only sharded metadata'
+            f'Loading only tensors metadata not implemented for {self.__class__.__name__}'
         )
 
     def load_sharded_metadata(self, checkpoint_dir: Path):
-        """Load sharded metadata from the checkpoint.
-
-        TODO
+        """Load sharded metadata from the checkpoint for ShardedTensors and ShardedObjects.
 
         Returns a dictionary similar to a sharded state dict, but note that
-        the dictionary keys are simply ShardedTensor keys (contrary to the
+        the dictionary keys are simply sharded keys (contrary to the
         actual sharded state dicts where keys correspond to state dict keys).
 
-        Dict values are ShardedTensors without any sharding (so, the only useful
-        information is tensors global shape and dtype).
+        Dict values are ShardedTensors or ShardedObjects without any data and sharding.
         """
         if not self.can_handle_sharded_objects:
             return self.load_tensors_metadata(checkpoint_dir)
-        raise NotImplementedError
+        raise NotImplementedError(
+            f'Loading only sharded metadata not implemented for {self.__class__.__name__}'
+        )
 
 
 class SaveCommonStrategy(SaveStrategyBase):

@@ -626,6 +626,9 @@ class FullyParallelLoadStrategyWrapper(LoadShardedStrategy):
     def load_tensors_metadata(self, checkpoint_dir: Path):
         return self.base_strategy.load_tensors_metadata(checkpoint_dir)
 
+    def load_sharded_metadata(self, checkpoint_dir: Path):
+        return self.base_strategy.load_sharded_metadata(checkpoint_dir)
+
     def check_backend_compatibility(self, loaded_version):
         return self.base_strategy.check_backend_compatibility(loaded_version)
 
