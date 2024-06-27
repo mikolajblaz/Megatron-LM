@@ -163,7 +163,7 @@ def load(
 
 
 def load_common_state_dict(checkpoint_dir: Path) -> StateDict:
-    """ Load common (non-sharded) objects state dict from the checkpoint.
+    """Load common (non-sharded) objects state dict from the checkpoint.
 
     Args:
         checkpoint_dir (Path): checkpoint directory
@@ -176,7 +176,8 @@ def load_common_state_dict(checkpoint_dir: Path) -> StateDict:
 
 
 def load_tensors_metadata(
-    checkpoint_dir: str, sharded_strategy: Union[LoadShardedStrategy, None] = None,
+    checkpoint_dir: str,
+    sharded_strategy: Union[LoadShardedStrategy, None] = None,
 ) -> CkptShardedMetadata:
     """Load tensors metadata from the checkpoint.
 

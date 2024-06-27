@@ -48,7 +48,7 @@ class TorchCommonSaveStrategy(SaveCommonStrategy):
 
 class TorchCommonLoadStrategy(LoadCommonStrategy):
     def load_common(self, checkpoint_dir: Path):
-        """ Load common (non-sharded) objects state dict from the checkpoint.
+        """Load common (non-sharded) objects state dict from the checkpoint.
 
         Args:
             checkpoint_dir (Path): checkpoint directory
@@ -68,7 +68,7 @@ class TorchCommonLoadStrategy(LoadCommonStrategy):
     def load_sharded_objects(
         self, sharded_objects_state_dict: ShardedStateDict, checkpoint_dir: Path
     ):
-        """ Replaces all ShardedObject from a given state dict with values loaded from the checkpoint.
+        """Replaces all ShardedObject from a given state dict with values loaded from the checkpoint.
 
         Args:
             sharded_objects_state_dict (ShardedStateDict): sharded state dict defining what objects should be loaded.

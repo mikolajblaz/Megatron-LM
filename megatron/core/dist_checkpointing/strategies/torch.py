@@ -63,7 +63,7 @@ logger = getLogger(__name__)
 def flatten_state_dict(
     state_dict: ShardedStateDict,
 ) -> Tuple[ShardedStateDict, Dict[str, OBJ_PATH]]:
-    """ Flattens state dict into a single level dict.
+    """Flattens state dict into a single level dict.
 
     It's a copy of torch.distributed.checkpoint._nested_dict.flatten_state_dict
     which also accepts ShardedBase tensors as terminal objects
@@ -326,7 +326,7 @@ def mcore_to_pyt_state_dict(
 
 
 def _unwrap_pyt_sharded_tensor(sh_ten: TorchShardedTensor) -> List[torch.Tensor]:
-    """ Unwrap tensor from PyT ShardedTensor instance.
+    """Unwrap tensor from PyT ShardedTensor instance.
 
     If `prepend_axis_num` was non-zero (which is specific to MCore ShardedTensor)
     then the tensor has additional singleton dimensions which should be squeezed.
@@ -348,7 +348,7 @@ def _unwrap_pyt_sharded_tensor(sh_ten: TorchShardedTensor) -> List[torch.Tensor]
 def _replace_state_dict_keys_with_sharded_keys(
     sharded_state_dict: ShardedStateDict, keep_only_main_replica: bool = False
 ) -> Tuple[Dict[str, List[ShardedBase]], FLATTEN_MAPPING, Dict[str, List[str]]]:
-    """Group ShardedBase objects by keys and return mappings required for recreating the original dict. """
+    """Group ShardedBase objects by keys and return mappings required for recreating the original dict."""
     flat_sd, flat_mapping = flatten_state_dict(sharded_state_dict)
     rename_mapping = defaultdict(list)
     new_flat_sd = defaultdict(list)
@@ -366,7 +366,7 @@ def _replace_sharded_keys_with_state_dict_keys(
     flat_mapping: FLATTEN_MAPPING,
     rename_mapping: Dict[str, List[str]],
 ):
-    """ Inverse of _replace_state_dict_keys_with_sharded_keys. """
+    """Inverse of _replace_state_dict_keys_with_sharded_keys."""
     recovered_sd = {}
     for k, tensors in state_dict.items():
         assert len(tensors) == len(rename_mapping[k])
@@ -377,7 +377,7 @@ def _replace_sharded_keys_with_state_dict_keys(
 
 
 def _restore_dict_types(x: Union[dict, list, Any], keys_template: Union[dict, list, Any]):
-    """ Recursively update `x` keys, based on `keys_template`. """
+    """Recursively update `x` keys, based on `keys_template`."""
     if isinstance(keys_template, dict):
         assert isinstance(x, dict), type(x)
         for k, v in keys_template.items():
@@ -512,7 +512,7 @@ class TorchDistSaveShardedStrategy(AsyncSaveShardedStrategy):
     def async_save(
         self, sharded_state_dict: ShardedStateDict, checkpoint_dir: Path
     ) -> AsyncRequest:
-        """ Translates MCore ShardedTensors to PyT ShardedTensors and saves in PyT Distributed format.
+        """Translates MCore ShardedTensors to PyT ShardedTensors and saves in PyT Distributed format.
 
         Args:
             sharded_state_dict (ShardedStateDict): sharded state dict to save
@@ -555,7 +555,7 @@ class TorchDistSaveShardedStrategy(AsyncSaveShardedStrategy):
 
 
 class TorchDistLoadShardedStrategy(LoadShardedStrategy):
-    """Basic load strategy for the PyT Distributed format. """
+    """Basic load strategy for the PyT Distributed format."""
 
     def load(self, sharded_state_dict: ShardedStateDict, checkpoint_dir: Path) -> StateDict:
         """Translates MCore ShardedTensors to PyT ShardedTensors and loads from PyT Distributed format.
@@ -619,7 +619,8 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
             if nd_orig_global_shape is None:
                 # Regular tensor
                 sharded_metadata[k] = ShardedTensor.from_rank_offsets(
-                    k, torch.empty(tp.size, **tp.properties.__dict__, device='meta'),
+                    k,
+                    torch.empty(tp.size, **tp.properties.__dict__, device='meta'),
                 ).without_data()
             else:
                 # N-D flattened tensor
@@ -664,6 +665,6 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
 default_strategies[StrategyAction.LOAD_SHARDED.value][
     ('torch_dist', 1)
 ] = TorchDistLoadShardedStrategy()
-default_strategies[StrategyAction.SAVE_SHARDED.value][
-    ('torch_dist', 1)
-] = TorchDistSaveShardedStrategy('torch_dist', 1)
+default_strategies[StrategyAction.SAVE_SHARDED.value][('torch_dist', 1)] = (
+    TorchDistSaveShardedStrategy('torch_dist', 1)
+)

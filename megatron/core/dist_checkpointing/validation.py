@@ -83,12 +83,12 @@ class StrictHandling(Enum):
 
     @staticmethod
     def requires_explicit_ckpt_mismatch_check(val: 'StrictHandling') -> bool:
-        """ Whether a given strict flag involves mismatch check against the checkpoint. """
+        """Whether a given strict flag involves mismatch check against the checkpoint."""
         return val != StrictHandling.ASSUME_OK_UNEXPECTED
 
     @staticmethod
     def requires_global_app_metadata(val: 'StrictHandling') -> bool:
-        """ Whether a given strict option requires global metadata for validation. """
+        """Whether a given strict option requires global metadata for validation."""
         return val in (
             StrictHandling.IGNORE_ALL,
             StrictHandling.RAISE_ALL,
@@ -98,8 +98,11 @@ class StrictHandling(Enum):
 
     @staticmethod
     def requires_returning_mismatch_keys(val: 'StrictHandling') -> bool:
-        """ Whether a given strict option results in extra return value from the `load` function. """
-        return val in (StrictHandling.RETURN_UNEXPECTED, StrictHandling.RETURN_ALL,)
+        """Whether a given strict option results in extra return value from the `load` function."""
+        return val in (
+            StrictHandling.RETURN_UNEXPECTED,
+            StrictHandling.RETURN_ALL,
+        )
 
 
 def validate_integrity_and_strict_load(
@@ -110,7 +113,7 @@ def validate_integrity_and_strict_load(
     global_metadata: Optional[_GlobalMetadata] = None,
     ckpt_sharded_metadata: Optional['CkptShardedMetadata'] = None,
 ) -> Tuple[ShardedStateDict, Set[str], Set[str]]:
-    """ Validates sharding integrity and potential mismatches with the checkpoint.
+    """Validates sharding integrity and potential mismatches with the checkpoint.
 
     `validate_access_integrity` controls sharding integrity check (orthogonal
     to strictness checking) which verifies `sharded_state_dict` runtime completeness
@@ -185,7 +188,7 @@ def verify_checkpoint_and_load_strategy(
     sharded_strategy: Union[LoadShardedStrategy, Tuple[str, int], None] = None,
     common_strategy: Union[LoadCommonStrategy, Tuple[str, int], None] = None,
 ) -> Tuple[LoadShardedStrategy, LoadCommonStrategy]:
-    """ Verifies if checkpoint metadata exists and matches given strategies.
+    """Verifies if checkpoint metadata exists and matches given strategies.
 
     If no strategies are passed, they are determined based on the checkpoint metadata.
 
@@ -231,9 +234,10 @@ def verify_checkpoint_and_load_strategy(
 
 
 def adjust_non_strict_load(
-    sharded_state_dict: ShardedStateDict, sharded_keys_to_remove: Set[str],
+    sharded_state_dict: ShardedStateDict,
+    sharded_keys_to_remove: Set[str],
 ) -> ShardedStateDict:
-    """ Adjusts sharded state dict removing keys not existing in the checkpoint.
+    """Adjusts sharded state dict removing keys not existing in the checkpoint.
 
     Args:
         sharded_state_dict (ShardedStateDict): sharded state dict to modify
@@ -256,7 +260,7 @@ def _determine_missing_and_unexpected_keys(
     local_metadata: _LocalMetadata,
     global_metadata: Optional[_GlobalMetadata] = None,
 ) -> Tuple[Set[str], Set[str]]:
-    """ Determines load mismatches based on metadata.
+    """Determines load mismatches based on metadata.
 
     There is an asymmetry between "unexpected" and "missing" keys.
     Unexpected keys can be determined based only on local metadata.
@@ -302,7 +306,7 @@ def _determine_missing_and_unexpected_keys(
 def maybe_report_missing_and_unexpected_keys(
     missing_keys: Set[str], unexpected_keys: Set[str], raise_error: bool = True
 ) -> None:
-    """ Raises or logs an error in case missing or unexpected keys are non-empty.
+    """Raises or logs an error in case missing or unexpected keys are non-empty.
 
     Args:
         missing_keys (Set[str]): missing keys in the state dict
@@ -344,7 +348,7 @@ def maybe_report_missing_and_unexpected_keys(
 
 
 def validate_sharding_integrity(global_metadata: _GlobalMetadata) -> None:
-    """ Validate if the ShardedTensors and ShardedObjects from multiple processes define correct sharding.
+    """Validate if the ShardedTensors and ShardedObjects from multiple processes define correct sharding.
 
     Local ShardedTensors and ShardedObject metadata is exchanged with `torch.distributed.all_gather_object`
     and then process with global rank 0 checks if main replicas of the shards:
@@ -448,7 +452,7 @@ def _validate_sharding_for_key_flattened(tensors_by_shard):
 
 
 def _validate_objects_for_key(sharded_objects: List[ShardedObject]):
-    """ Ensure uniqueness of saved objects. """
+    """Ensure uniqueness of saved objects."""
     unique_keys = [
         sh_obj.unique_key for _, sh_obj in sharded_objects if is_main_replica(sh_obj.replica_id)
     ]
@@ -466,7 +470,7 @@ def _validate_objects_for_key(sharded_objects: List[ShardedObject]):
 def determine_global_metadata(
     sharded_state_dict: ShardedStateDict,
 ) -> Tuple[_LocalMetadata, _GlobalMetadata]:
-    """ Exchanges local metadata with `all_gather_object` to determine global metadata.
+    """Exchanges local metadata with `all_gather_object` to determine global metadata.
 
     Args:
         sharded_state_dict (ShardedStateDict): local sharded state dict
@@ -484,7 +488,7 @@ def validate_sharded_objects_handling(
     sharded_strategy: Union[SaveShardedStrategy, LoadShardedStrategy],
     common_strategy: Union[SaveCommonStrategy, LoadCommonStrategy],
 ) -> None:
-    """ Checks if either of the passed strategies can handle sharded objects.
+    """Checks if either of the passed strategies can handle sharded objects.
 
     Args:
         sharded_strategy (Union[SaveShardedStrategy, LoadShardedStrategy]): sharded strategy used for saving/loading
