@@ -8,12 +8,9 @@ Additionally, `load` expects the sharded state dict argument as a guidance for l
 """
 
 import logging
-import os
 from collections import Counter, defaultdict
-from itertools import chain
-from operator import attrgetter
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple, Union, Any, Set
+from typing import List, Optional, Tuple, Union, Set
 
 import numpy as np
 import torch
@@ -21,11 +18,10 @@ import torch
 from .core import CheckpointingConfig, maybe_load_config, save_config
 from .dict_utils import (
     dict_list_map_inplace,
-    diff,
     extract_matching_values,
     map_reduce,
     merge,
-    nested_values, dict_list_map_outplace,
+    nested_values,
 )
 from .mapping import (
     CheckpointingException,
@@ -36,7 +32,8 @@ from .mapping import (
     StateDict,
     apply_factories,
     apply_factory_merges,
-    is_main_replica, ShardedBase,
+    is_main_replica,
+    ShardedBase,
 )
 from .strategies.async_utils import AsyncRequest
 from .strategies.base import (
@@ -51,8 +48,6 @@ from .strategies.base import (
 from .utils import (
     extract_nonpersistent,
     extract_sharded_base,
-    extract_sharded_tensors,
-    extract_sharded_tensors_or_nonpersistent,
 )
 
 # TODO
@@ -121,9 +116,7 @@ def load(
 
     # Sharded base
     if not sharded_strategy.can_handle_sharded_objects:
-        if not common_strategy.can_handle_sharded_objects:
-            raise CheckpointingException(f'Either sharded strategy or common strategy must implement ShardedObjects loading.'
-                                         f' Both {sharded_strategy} and {common_strategy} specify can_handle_sharded_objects=False')
+        _validate_sharded_objects_handling(sharded_strategy, common_strategy)
         sharded_objects_state_dict, sharded_state_dict = extract_matching_values(
             sharded_state_dict, lambda v: isinstance(v, ShardedObject)
         )
@@ -258,9 +251,7 @@ def load_sharded_metadata(
     sharded_strategy, common_strategy = _verify_checkpoint_and_load_strategy(checkpoint_dir, sharded_strategy)
     sharded_metadata = sharded_strategy.load_sharded_metadata(Path(checkpoint_dir))
     if not sharded_strategy.can_handle_sharded_objects:
-        if not common_strategy.can_handle_sharded_objects:
-            raise CheckpointingException(f'Either sharded strategy or common strategy must implement ShardedObjects saving.'
-                                         f' Both {sharded_strategy} and {common_strategy} specify can_handle_sharded_objects=False')
+        _validate_sharded_objects_handling(sharded_strategy, common_strategy)
         common_metadata = common_strategy.load_sharded_metadata(checkpoint_dir)
         sharded_metadata = merge(sharded_metadata, common_metadata)
     return sharded_metadata
@@ -353,6 +344,27 @@ def maybe_report_missing_and_unexpected_keys(missing_keys: Set[str], unexpected_
             logger.warning(_unexpected_msg)
 
 
+def _validate_sharded_objects_handling(
+        sharded_strategy: Union[SaveShardedStrategy, LoadShardedStrategy],
+        common_strategy: Union[SaveCommonStrategy, LoadCommonStrategy],
+) -> None:
+    """ Checks is either of the passed strategies can handle sharded objects.
+
+    Args:
+        sharded_strategy (Union[SaveShardedStrategy, LoadShardedStrategy]): sharded strategy used for saving/loading
+        common_strategy (Union[SaveCommonStrategy, LoadCommonStrategy]): common strategy used for saving/loading
+
+    Returns:
+        None
+
+    Raises:
+        CheckpointingException: if both strategies can't handle ShardedObjects
+    """
+    if not sharded_strategy.can_handle_sharded_objects and not common_strategy.can_handle_sharded_objects:
+        raise CheckpointingException(f'Either sharded strategy or common strategy must implement ShardedObjects handling.'
+                                     f' Both {sharded_strategy} and {common_strategy} specify can_handle_sharded_objects=False')
+
+
 def save(
     sharded_state_dict: ShardedStateDict,
     checkpoint_dir: str,
@@ -440,9 +452,7 @@ def save(
         validate_sharding_integrity(determine_global_metadata(sharded_state_dict)[1])
 
     if not sharded_strategy.can_handle_sharded_objects:
-        if not common_strategy.can_handle_sharded_objects:
-            raise CheckpointingException(f'Either sharded strategy or common strategy must implement ShardedObjects saving.'
-                                         f' Both {sharded_strategy} and {common_strategy} specify can_handle_sharded_objects=False')
+        _validate_sharded_objects_handling(sharded_strategy, common_strategy)
         sharded_objects_state_dict, sharded_state_dict = extract_matching_values(
             sharded_state_dict, lambda v: isinstance(v, ShardedObject)
         )
