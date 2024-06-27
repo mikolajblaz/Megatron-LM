@@ -19,6 +19,7 @@ from .mapping import (
     CheckpointingException,
     ShardedObject,
     ShardedStateDict,
+    LocalShardedMetadata,
     ShardedTensorFactory,
     StateDict,
     apply_factories,
@@ -42,7 +43,7 @@ from .validation import (
     maybe_report_missing_and_unexpected_keys,
     validate_sharded_objects_handling,
     validate_sharding_integrity,
-    verify_checkpoint_and_load_strategy,
+    verify_checkpoint_and_load_strategy, StrictHandling,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ def load(
     sharded_strategy: Union[LoadShardedStrategy, Tuple[str, int], None] = None,
     common_strategy: Union[LoadCommonStrategy, Tuple[str, int], None] = None,
     validate_access_integrity: bool = True,
-    strict: bool = True,
+    strict: StrictHandling = True,
 ) -> StateDict:
     """Loading entrypoint.
 
@@ -169,8 +170,9 @@ def load_common_state_dict(checkpoint_dir: Path) -> StateDict:
 
 
 def load_tensors_metadata(
-    checkpoint_dir: str, sharded_strategy: Union[LoadShardedStrategy, None] = None
-) -> ShardedStateDict:
+    checkpoint_dir: str,
+    sharded_strategy: Union[LoadShardedStrategy, None] = None,
+) -> LocalShardedMetadata:
     """Load tensors metadata from the checkpoint.
 
     Returns a dictionary similar to a sharded state dict, but note that
@@ -182,6 +184,14 @@ def load_tensors_metadata(
 
     Concrete implementation depends on the loading strategy. If no strategy is
     given, a default for a given backend is used.
+
+    Args:
+        checkpoint_dir (str): checkpoint directory to load from
+        sharded_strategy (LoadShardedStrategy, optional): sharded strategy to load metadata.
+            Defaults to None - in this case a default load strategy for a given checkpoint type is used.
+
+    Returns:
+        LocalShardedMetadata: flat state dict without data describing ShardedTensors in the checkpoint
     """
     sharded_strategy, common_strategy = verify_checkpoint_and_load_strategy(
         checkpoint_dir, sharded_strategy
@@ -189,10 +199,11 @@ def load_tensors_metadata(
     return sharded_strategy.load_tensors_metadata(Path(checkpoint_dir))
 
 
-# TODO
 def load_sharded_metadata(
-    checkpoint_dir: str, sharded_strategy: Union[LoadShardedStrategy, None] = None
-) -> ShardedStateDict:
+    checkpoint_dir: str,
+    sharded_strategy: Union[LoadShardedStrategy, None] = None,
+    common_strategy: Union[LoadCommonStrategy, None] = None,
+) -> LocalShardedMetadata:
     """Load sharded metadata from the checkpoint.
 
     Similar to `load_tensors_metadata`, but includes also ShardedObjects.
@@ -206,9 +217,21 @@ def load_sharded_metadata(
 
     Concrete implementation depends on the loading strategy. If no strategy is
     given, a default for a given backend is used.
+
+    Args:
+        checkpoint_dir (str): checkpoint directory to load from
+        sharded_strategy (LoadShardedStrategy, optional): sharded strategy to load metadata.
+            Defaults to None - in this case a default load strategy for a given checkpoint type is used.
+        common_strategy (LoadCommonStrategy, optional): common strategy to load metadata.
+            Defaults to None - in this case a default load strategy for a given checkpoint type is used.
+            This strategy won't be used unless `sharded_strategy` can't handle ShardedObjects
+
+    Returns:
+        LocalShardedMetadata: flat state dict without data describing ShardedTensors
+            and ShardedObjects in the checkpoint
     """
     sharded_strategy, common_strategy = verify_checkpoint_and_load_strategy(
-        checkpoint_dir, sharded_strategy
+        checkpoint_dir, sharded_strategy, common_strategy
     )
     sharded_metadata = sharded_strategy.load_sharded_metadata(Path(checkpoint_dir))
     if not sharded_strategy.can_handle_sharded_objects:
@@ -218,10 +241,17 @@ def load_sharded_metadata(
     return sharded_metadata
 
 
-def load_plain_tensors(checkpoint_dir: str):
-    """Load checkpoint tensors without any sharding.
+def load_plain_tensors(checkpoint_dir: str) -> StateDict:
+    """Load checkpoint tensors without any sharding and plain structure.
 
-    NOTE: common state dict is NOT included."""
+    NOTE: common state dict is NOT included.
+
+    Args:
+        checkpoint_dir (str): checkpoint directory to load the tensors from.
+
+    Returns:
+        StateDict: checkpoint state dict containing only torch.Tensors.
+    """
     sharded_state_dict = load_tensors_metadata(checkpoint_dir)
     # Don't validate integrity because shards will be overlapped
     # if world_size > 1 (all processes load whole tensors)

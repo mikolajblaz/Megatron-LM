@@ -17,6 +17,7 @@ from megatron.core.dist_checkpointing.mapping import (
     ShardedBase,
     ShardedObject,
     ShardedStateDict,
+    ShardedStateDictNoData,
     is_main_replica,
 )
 from megatron.core.dist_checkpointing.strategies.base import (
@@ -30,9 +31,10 @@ from megatron.core.dist_checkpointing.strategies.base import (
 
 logger = logging.getLogger(__name__)
 
-# TODO
-LocalMetadata = List[Union[ShardedTensor, ShardedObject]]
-GlobalMetadata = List[LocalMetadata]
+# list of local saved/loaded ShardedBase objects
+_LocalMetadata = List[Union[ShardedTensor, ShardedObject]]
+# list of lists of global saved/loaded ShardedBase objects (each list element corresponds to global rank)
+_GlobalMetadata = List[_LocalMetadata]
 
 
 def verify_checkpoint_and_load_strategy(
@@ -40,12 +42,17 @@ def verify_checkpoint_and_load_strategy(
     sharded_strategy: Union[LoadShardedStrategy, Tuple[str, int], None] = None,
     common_strategy: Union[LoadCommonStrategy, Tuple[str, int], None] = None,
 ) -> Tuple[LoadShardedStrategy, LoadCommonStrategy]:
-    """ Verifies if checkpoint metadata exists and matches given strategy.
+    """ Verifies if checkpoint metadata exists and matches given strategies.
+
+    If no strategies are passed, they are determined based on the checkpoint metadata.
 
     Args:
         checkpoint_dir (str): checkpoint directory
-        sharded_strategy (LoadShardedStrategy, Tuple[str, int], optional): load strategy to be verified
-            if compatible with the checkpoint content. If None, the default load strategy
+        sharded_strategy (LoadShardedStrategy, Tuple[str, int], optional): sharded load strategy to be verified
+            if compatible with the checkpoint content. If None, the default sharded load strategy
+            for the checkpoint backend will be returned.
+        common_strategy (LoadCommonStrategy, Tuple[str, int], optional): common load strategy to be verified
+            if compatible with the checkpoint content. If None, the default common load strategy
             for the checkpoint backend will be returned.
     """
     if not Path(checkpoint_dir).exists():
@@ -73,39 +80,59 @@ def verify_checkpoint_and_load_strategy(
     elif isinstance(common_strategy, tuple):
         sharded_strategy = get_default_strategy(StrategyAction.LOAD_COMMON, *common_strategy)
 
-    # TODO: implement consistency checks here
+    sharded_strategy.check_backend_compatibility(saved_config.sharded_backend)
+    sharded_strategy.check_version_compatibility(saved_config.sharded_backend_version)
+    common_strategy.check_backend_compatibility(saved_config.common_backend)
+    common_strategy.check_version_compatibility(saved_config.common_backend_version)
     return sharded_strategy, common_strategy
 
 
 def adjust_non_strict_load(
-    sharded_state_dict: ShardedStateDict, unexpected_keys: Set[str],
-):
-    def should_remove_unexpected_keys(x: ShardedBase):
-        assert isinstance(x, ShardedBase), f'Unexpected type {type(x)}'
-        return x.key in unexpected_keys
+    sharded_state_dict: ShardedStateDict, sharded_keys_to_remove: Set[str],
+) -> ShardedStateDict:
+    """ Adjusts state dict in-place removing keys not existing in the checkpoint.
 
-    _, sharded_state_dict = extract_matching_values(
-        sharded_state_dict, should_remove_unexpected_keys
-    )
+    Args:
+        sharded_state_dict (ShardedStateDict): sharded state dict to modify
+        sharded_keys_to_remove (Set[str]): keys to remove from the state dict
+
+    Returns:
+        ShardedStateDict: state dict without ShardedBase objects with specified keys
+    """
+
+    def is_unexpected_key(x: ShardedBase):
+        assert isinstance(x, ShardedBase), f'Unexpected type {type(x)}'
+        return x.key in sharded_keys_to_remove
+
+    _, sharded_state_dict = extract_matching_values(sharded_state_dict, is_unexpected_key)
     return sharded_state_dict
 
 
 def _determine_missing_and_unexpected_keys(
-    ckpt_sharded_metadata: ShardedStateDict,
-    local_metadata: LocalMetadata,
-    global_metadata: GlobalMetadata,
+    ckpt_sharded_metadata: ShardedStateDictNoData,
+    local_metadata: _LocalMetadata,
+    global_metadata: _GlobalMetadata,
 ) -> Tuple[Set[str], Set[str]]:
-    """
-    NOTE: asymmetry
-    TODO
+    """ Determines load mismatches based on metadata.
+
+    There is an asymmetry between "unexpected" and "missing" keys.
+    Unexpected keys can be determined based only on local metadata.
+    Missing keys must be based on global metadata, since other ranks might access
+    different keys than the current rank.
+    In consequence, the return value of this function is different on each rank:
+    "missing_keys" are equal, but "unexpected_keys" might differ across ranks.
+
     Args:
-        sharded_state_dict:
-        ckpt_sharded_metadata:
-        local_metadata:
-        global_metadata:
+        ckpt_sharded_metadata (ShardedStateDictNoData): sharded state dict (without data)
+            constructed based on the checkpoint content
+        local_metadata (_LocalMetadata): list of local ShardedBase objects
+            requested to be loaded by this rank
+        global_metadata (_GlobalMetadata): list of global ShardedBase objects
+            requested to be loaded by all ranks
 
     Returns:
-
+        Tuple[Set[str], Set[str]]: missing and unexpected keys. Missing keys are equal
+            on all ranks, unexpected keys might differ across ranks.
     """
     global_accessed_keys = set(
         sh_base.key for rank_metadata in global_metadata for sh_base in rank_metadata
@@ -128,7 +155,7 @@ def maybe_report_missing_and_unexpected_keys(
     missing_keys: Set[str], unexpected_keys: Set[str], raise_error: bool = True
 ) -> None:
     """
-    TODO
+    TODO rethink
     Args:
         missing_keys:
         unexpected_keys:
@@ -162,16 +189,16 @@ def maybe_report_missing_and_unexpected_keys(
             logger.warning(_unexpected_msg)
 
 
-def validate_sharding_integrity(global_metadata: GlobalMetadata):
-    """ Validate if the ShardedTensors from multiple processes define correct sharding of a global tensor.
+def validate_sharding_integrity(global_metadata: _GlobalMetadata) -> None:
+    """ Validate if the ShardedTensors and ShardedObjects from multiple processes define correct sharding.
 
-    Local ShardedTensors metadata is exchanged with `torch.distributed.all_gather_object`
+    Local ShardedTensors and ShardedObject metadata is exchanged with `torch.distributed.all_gather_object`
     and then process with global rank 0 checks if main replicas of the shards:
     - cover the whole global tensors
     - don't overlap
 
     Args:
-        global_metadata (TODO): sharded tensors local to this process
+        global_metadata (_GlobalMetadata): ShardedTensor and ShardedObject objects from all ranks.
 
     Returns:
         None
@@ -238,7 +265,6 @@ def _compute_shards_access(rank_sharding):
     for rank, sharding in rank_sharding:
         if is_main_replica(sharding.replica_id):
             shard_access_cnt[sharding.local_chunk_offset_in_global()] += 1
-        # TODO: consider validating different replicas too
     return shard_access_cnt
 
 
@@ -249,7 +275,6 @@ def _validate_sharding_for_key_flattened(tensors_by_shard):
         assert sharding.local_shape == local_shape
         sharding: ShardedTensor
         if not is_main_replica(sharding.replica_id):
-            # TODO: this checks only saving (and loading replica_id=0) consistency
             continue
 
         all_slices.append((sharding.flattened_range.start, sharding.flattened_range.stop))
@@ -286,14 +311,14 @@ def _validate_objects_for_key(sharded_objects: List[ShardedObject]):
 
 def determine_global_metadata(
     sharded_state_dict: ShardedStateDict,
-) -> Tuple[LocalMetadata, GlobalMetadata]:
-    """
-    TODO
+) -> Tuple[_LocalMetadata, _GlobalMetadata]:
+    """ Exchanges local metadata with `all_gather_object` to determine global metadata.
+
     Args:
-        sharded_state_dict:
+        sharded_state_dict (ShardedStateDict): local sharded state dict
 
     Returns:
-
+        Tuple[_LocalMetadata, _GlobalMetadata]: local and global ShardedBase objects with stripped data
     """
     local_metadata = [ten.without_data() for ten in nested_values(sharded_state_dict)]
     global_metadata = [None] * torch.distributed.get_world_size()
@@ -305,7 +330,7 @@ def validate_sharded_objects_handling(
     sharded_strategy: Union[SaveShardedStrategy, LoadShardedStrategy],
     common_strategy: Union[SaveCommonStrategy, LoadCommonStrategy],
 ) -> None:
-    """ Checks is either of the passed strategies can handle sharded objects.
+    """ Checks if either of the passed strategies can handle sharded objects.
 
     Args:
         sharded_strategy (Union[SaveShardedStrategy, LoadShardedStrategy]): sharded strategy used for saving/loading
