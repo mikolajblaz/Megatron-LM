@@ -19,14 +19,14 @@ from megatron.core.dist_checkpointing.dict_utils import (
     nested_values,
 )
 from megatron.core.dist_checkpointing.mapping import ShardedStateDict, StateDict, is_main_replica
-from megatron.core.dist_checkpointing.serialization import (
-    determine_global_metadata,
-    validate_sharding_integrity,
-)
 from megatron.core.dist_checkpointing.strategies.base import (
     AsyncSaveShardedStrategy,
     LoadShardedStrategy,
     SaveShardedStrategy,
+)
+from megatron.core.dist_checkpointing.validation import (
+    determine_global_metadata,
+    validate_sharding_integrity,
 )
 
 logger = logging.getLogger(__name__)
