@@ -447,7 +447,7 @@ def _validate_sharding_for_key_flattened(tensors_by_shard):
             f'Flattened ranges dont cover the whole shard {tensors_by_shard[0]}. Ranges: {(starts, stops)}'
         )
         raise CheckpointingException(
-            f'Flattened ranges dont cover the whole shard {tensors_by_shard[0]}'
+            f'Flattened ranges dont cover the whole shard {tensors_by_shard[0]}. Ranges: {(starts, stops)}'
         )
 
 

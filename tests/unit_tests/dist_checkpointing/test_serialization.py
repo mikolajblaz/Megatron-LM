@@ -23,6 +23,15 @@ from tests.unit_tests.test_utilities import Utils
 
 
 class TestSerialization:
+    def setup_class(cls):
+        Utils.initialize_distributed()
+
+    @pytest.fixture(scope='function', autouse=True)
+    def cleanup_model_parallel(self):
+        # pass for initialize
+        yield
+        Utils.destroy_model_parallel()
+
     def test_single_process_save_load(self, tmp_path_dist_ckpt):
         Utils.initialize_model_parallel(1,1)
 
@@ -31,7 +40,8 @@ class TestSerialization:
             'sd_keyB': ShardedTensor.from_rank_offsets('keyB', torch.ones(3, 5, 7), replica_id=Utils.rank),
         }
 
-        with TempNamedDir(tmp_path_dist_ckpt / 'test_single_process_save_load') as ckpt_dir:
+        # sync=True to make sure other ranks wait for rank 0 to finish creating directory.
+        with TempNamedDir(tmp_path_dist_ckpt / 'test_single_process_save_load', sync=True) as ckpt_dir:
             save(sharded_state_dict, ckpt_dir)
             torch.distributed.barrier()
 
@@ -62,7 +72,8 @@ class TestSerialization:
             'sd_keyB': ShardedTensor.from_rank_offsets('keyB', torch.ones(3, 5, 7), (2, Utils.rank, Utils.world_size)),
         }
 
-        with TempNamedDir(tmp_path_dist_ckpt / 'test_multi_process_save') as ckpt_dir:
+        # sync=True to make sure other ranks wait for rank 0 to finish creating directory.
+        with TempNamedDir(tmp_path_dist_ckpt / 'test_multi_process_save', sync=True) as ckpt_dir:
             save(state_dict, ckpt_dir)
 
             saved_config = maybe_load_config(ckpt_dir)
@@ -103,7 +114,8 @@ class TestSerialization:
         assert state_dict['sd_keyA'].global_shape == ten_a_global_shape
         assert state_dict['sd_keyB'].global_shape == ten_b_global_shape
 
-        with TempNamedDir(tmp_path_dist_ckpt / 'test_partition_change_save_load') as ckpt_dir:
+        # sync=True to make sure other ranks wait for rank 0 to finish creating directory.
+        with TempNamedDir(tmp_path_dist_ckpt / 'test_partition_change_save_load', sync=True) as ckpt_dir:
             save(state_dict, ckpt_dir, strategy)
 
             del ten_a, ten_b
@@ -170,7 +182,8 @@ class TestSerialization:
             'sd_keyB': ShardedTensor.from_rank_offsets('keyB', torch.ones(3, 5, 7), (2, Utils.rank, Utils.world_size)),
         }
 
-        with TempNamedDir(tmp_path_dist_ckpt / 'test_load_tensors_metadata') as ckpt_dir:
+        # sync=True to make sure other ranks wait for rank 0 to finish creating directory.
+        with TempNamedDir(tmp_path_dist_ckpt / 'test_load_tensors_metadata', sync=True) as ckpt_dir:
             save(state_dict, ckpt_dir)
 
             del state_dict
@@ -217,7 +230,8 @@ class TestSerialization:
                 ShardedTensorFactory('D', torch.arange(5) + base, _build_fn, sum, replica_id=Utils.rank),
             ]}
 
-        with TempNamedDir(tmp_path_dist_ckpt / 'test_can_mix_sharded_tensors_and_factories') as ckpt_dir:
+        # sync=True to make sure other ranks wait for rank 0 to finish creating directory.
+        with TempNamedDir(tmp_path_dist_ckpt / 'test_can_mix_sharded_tensors_and_factories', sync=True) as ckpt_dir:
             save(get_sharded_state_dict(0), ckpt_dir)
             loaded_state_dict = load(get_sharded_state_dict(10), ckpt_dir)
 
@@ -246,8 +260,8 @@ class TestSerialization:
             load(state_dict, non_ex_path)
         assert f'directory {non_ex_path} does not exist' in str(exc_info.value)
 
-        with TempNamedDir(tmp_path_dist_ckpt / ckpt_dir_name) as ckpt_dir:
-            torch.distributed.barrier()
+        # sync=True to make sure other ranks wait for rank 0 to finish creating directory.
+        with TempNamedDir(tmp_path_dist_ckpt / ckpt_dir_name, sync=True) as ckpt_dir:
             # Empty directory - not a distributed checkpoint
             with pytest.raises(CheckpointingException) as exc_info:
                 load(state_dict, ckpt_dir)
@@ -263,7 +277,8 @@ class TestSerialization:
 
     def test_sharded_object_serialization(self, tmp_path_dist_ckpt):
         Utils.initialize_model_parallel(1, 1)
-        with TempNamedDir(tmp_path_dist_ckpt / 'test_sh_obj') as ckpt_dir:
+        # sync=True to make sure other ranks wait for rank 0 to finish creating directory.
+        with TempNamedDir(tmp_path_dist_ckpt / 'test_sh_obj', sync=True) as ckpt_dir:
             state = {'some': 'dict'}
             state_serialized = io.BytesIO()
             torch.save(state, state_serialized)
@@ -300,7 +315,8 @@ class TestSerialization:
         assert state_dict['rigid'].global_shape == (2, 32)
         assert state_dict['flexible'].global_shape == (2, 32)
 
-        with TempNamedDir(tmp_path_dist_ckpt / 'test_tensor_shape_mismatch') as ckpt_dir:
+        # sync=True to make sure other ranks wait for rank 0 to finish creating directory.
+        with TempNamedDir(tmp_path_dist_ckpt / 'test_tensor_shape_mismatch', sync=True) as ckpt_dir:
             save(state_dict, ckpt_dir)
 
             pp_size = parallel_state.get_pipeline_model_parallel_world_size()
@@ -364,7 +380,7 @@ class TestNonStrictLoad:
         sharded_state_dict = self._get_base_state_dict()
         with TempNamedDir(tmp_path_dist_ckpt / 'test_unexpected_keys_raises_error_during_validation') as ckpt_dir:
             save(sharded_state_dict, ckpt_dir)
-            
+
             def load_with_flag(strict):
                 sharded_state_dict = self._get_base_state_dict()
                 sharded_state_dict['TenD'] = ShardedTensor.from_rank_offsets('UnexpectedTenD', torch.arange(3), replica_id=Utils.rank)
@@ -376,7 +392,7 @@ class TestNonStrictLoad:
                 assert 'UnexpectedTenD' in error_msg
                 assert 'UnexpectedObjD' in error_msg
                 assert 'Missing keys' not in error_msg
-                
+
             # ASSUME_OK_UNEXPECTED results in an exception raised by the underlying strategy
             with pytest.raises(PyTCheckpointingException) as exc_info:
                 load_with_flag(StrictHandling.ASSUME_OK_UNEXPECTED)

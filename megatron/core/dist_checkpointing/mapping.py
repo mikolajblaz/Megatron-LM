@@ -8,7 +8,7 @@ ShardedTensor class (mostly with the ShardedTensor.from_rank_offsets classmethod
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from itertools import chain
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
@@ -64,7 +64,7 @@ class ShardedTensor(ShardedBase):
     """
 
     key: str
-    data: Optional[torch.Tensor]
+    data: Optional[torch.Tensor] = field(repr=False)
     dtype: torch.dtype
     local_shape: Tuple[int, ...]
     global_shape: Tuple[int, ...]
@@ -316,9 +316,6 @@ class ShardedTensor(ShardedBase):
         if self.flattened_range is not None:
             self.data = self.data.flatten()[self.flattened_range.start : self.flattened_range.stop]
 
-    def __str__(self):
-        return f'{self.__class__.__name__}(key=\'{self.key}\')'
-
 
 def is_main_replica(replica_id: ReplicaId):
     """Checks if given `replica_id` is considered as main.
@@ -340,10 +337,10 @@ def is_main_replica(replica_id: ReplicaId):
     return all(r == 0 for r in replica_id)
 
 
-class LocalNonpersitentObject:
+class LocalNonpersistentObject:
     """Object that should not be stored in a checkpoint, but restored locally.
 
-    Wrapping any object inside the state dict with LocalNonpersitentObject
+    Wrapping any object inside the state dict with LocalNonpersistentObject
     will result in:
     - during saving, this object will *not* be stored in the checkpoint
     - during loading, a local version of this object will be placed in a state dict
@@ -354,6 +351,10 @@ class LocalNonpersitentObject:
 
     def unwrap(self):
         return self.obj
+
+
+# TODO: Delete once NeMo fixes typo.
+LocalNonpersitentObject = LocalNonpersistentObject
 
 
 @dataclass

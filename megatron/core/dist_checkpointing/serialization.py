@@ -114,6 +114,7 @@ def load(
         return_lists_as_dicts=True,
     )
     apply_factories(sharded_state_dict)
+
     # Data inside sh_ten_factories no longer needed so delete them to reduce memory usage
     dict_list_map_inplace(ShardedTensorFactory.without_data, sh_ten_factories)
     # Non-persistent objects
