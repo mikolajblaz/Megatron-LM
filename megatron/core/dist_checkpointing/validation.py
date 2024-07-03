@@ -60,26 +60,26 @@ class StrictHandling(Enum):
     """
 
     # Relies on the underlying strategy to raise error on unexpected keys
-    ASSUME_OK_UNEXPECTED = True
+    ASSUME_OK_UNEXPECTED = 'assume_ok_unexpected'
     # Logs (with WARNING level) "unexpected" keys. Missing keys are ignored.
     # This is treated as a reasonable default for a "non-strict" load
-    LOG_UNEXPECTED = False
+    LOG_UNEXPECTED = 'log_unexpected'
     # Logs (with WARNING level) all mismatched keys.
-    LOG_ALL = 2
+    LOG_ALL = 'log_all'
     # Raise error on unexpected keys before load attempt.
     # Gives cleaner error message than `ASSUME_OK_UNEXPECTED` but requires
     # extra disk access.
-    RAISE_UNEXPECTED = 3
+    RAISE_UNEXPECTED = 'raise_unexpected'
     # Raise error on any mismatch. Similar to `RAISE_UNEXPECTED` but requires
     # metadata exchange.
-    RAISE_ALL = 4
+    RAISE_ALL = 'raise_all'
     # "Unexpected" mismatches are not reported, but returned by the `load`
     # function along with the loaded state dict. Missing keys are ignored.
-    RETURN_UNEXPECTED = 5
+    RETURN_UNEXPECTED = 'return_unexpected'
     # All mismatches are returned along with the loaded state dict.
-    RETURN_ALL = 6
+    RETURN_ALL = 'return_all'
     # Simply ignores mismatches (not recommended)
-    IGNORE_ALL = 7
+    IGNORE_ALL = 'ignore_all'
 
     @staticmethod
     def requires_explicit_ckpt_mismatch_check(val: 'StrictHandling') -> bool:
@@ -103,6 +103,24 @@ class StrictHandling(Enum):
             StrictHandling.RETURN_UNEXPECTED,
             StrictHandling.RETURN_ALL,
         )
+
+
+def parse_strict_flag(strict: Union[str, StrictHandling]) -> StrictHandling:
+    """Parse user passed strict flag from a string to StrictHandling instance.
+
+    Args:
+        strict (str, StrictHandling): strict flag to parse. If already an instance
+            of StrictHandling, this function is a noop.
+
+    Returns:
+        StrictHandling: enum instance
+    """
+    if isinstance(strict, StrictHandling):
+        return strict
+    try:
+        return StrictHandling(strict)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f'Invalid strict flag: {e}') from e
 
 
 def validate_integrity_and_strict_load(

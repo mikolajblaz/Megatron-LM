@@ -39,6 +39,7 @@ from .utils import extract_nonpersistent, extract_sharded_base
 from .validation import (
     StrictHandling,
     determine_global_metadata,
+    parse_strict_flag,
     validate_integrity_and_strict_load,
     validate_sharded_objects_handling,
     validate_sharding_integrity,
@@ -58,7 +59,7 @@ def load(
     sharded_strategy: Union[LoadShardedStrategy, Tuple[str, int], None] = None,
     common_strategy: Union[LoadCommonStrategy, Tuple[str, int], None] = None,
     validate_access_integrity: bool = True,
-    strict: StrictHandling = StrictHandling.ASSUME_OK_UNEXPECTED,
+    strict: Union[str, StrictHandling] = StrictHandling.ASSUME_OK_UNEXPECTED,
 ) -> Union[StateDict, Tuple[StateDict, Set[str], Set[str]]]:
     """Loading entrypoint.
 
@@ -82,7 +83,7 @@ def load(
         common_strategy (LoadCommonStrategy, Tuple[str, int], optional): configures loading behavior for common data
         validate_access_integrity (bool default = True): checks if each tensor shard is accessed
             exactly once (as main replica) by some process
-        strict (StrictHandling, optional): determines the behavior in case of a mismatch
+        strict (StrictHandling, str, optional): determines the behavior in case of a mismatch
             between the requested sharded state dict and the checkpoint. See `StrictHandling` docs
             for more details. Some values affect the return value of this function
             (missing and unexpected keys are returned).
@@ -136,6 +137,7 @@ def load(
 
     ckpt_sharded_metadata = None
     local_metadata, global_metadata = None, None
+    strict = parse_strict_flag(strict)
     if StrictHandling.requires_explicit_ckpt_mismatch_check(strict):
         ckpt_sharded_metadata = load_sharded_metadata(
             str(checkpoint_dir), sharded_strategy, common_strategy
