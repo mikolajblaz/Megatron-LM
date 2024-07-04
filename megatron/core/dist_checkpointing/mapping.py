@@ -408,6 +408,9 @@ class ShardedObject(ShardedBase):
         assert shard_str == 'shard'
         offset = tuple(map(int, offset.split('.')))
         shape = tuple(map(int, shape.split('.')))
+        if len(shape) + 1 == len(offset):
+            # This is a backward-compatible fix. We don't know the last element of global shape so set it to -1.
+            shape += (-1,)
         return cls(key, None, shape, offset, replica_id)
 
 

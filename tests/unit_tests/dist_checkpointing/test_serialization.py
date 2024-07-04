@@ -15,7 +15,10 @@ from megatron.core.dist_checkpointing.core import CheckpointingException, \
 from megatron.core.dist_checkpointing.dict_utils import diff
 from megatron.core.dist_checkpointing.mapping import ShardedTensorFactory, \
     ShardedObject
-from megatron.core.dist_checkpointing.serialization import load_tensors_metadata
+from megatron.core.dist_checkpointing.serialization import \
+    load_tensors_metadata, load_sharded_metadata
+from megatron.core.dist_checkpointing.strategies.base import StrategyAction, \
+    get_default_strategy
 from megatron.core.dist_checkpointing.validation import StrictHandling
 
 from tests.unit_tests.dist_checkpointing import TempNamedDir
@@ -371,8 +374,8 @@ class TestNonStrictLoad:
             'TenA': ShardedTensor.from_rank_offsets('TenA', torch.arange(2), replica_id=Utils.rank),
             'TenB': ShardedTensor.from_rank_offsets('TenB', torch.arange(3), (0, Utils.rank, Utils.world_size), replica_id=0),
             'TenC': ShardedTensor.from_rank_offsets('TenC', torch.arange(3), replica_id=Utils.world_size - Utils.rank - 1),
-            'ObjA': ShardedObject('ObjA', object(), (1,), (0,), replica_id=Utils.rank),
-            'ObjB': ShardedObject('ObjB', object(), (Utils.world_size,), (Utils.rank,), replica_id=0),
+            'ObjA': ShardedObject('ObjA', list(range(10)), (1,), (0,), replica_id=Utils.rank),
+            'ObjB': ShardedObject('ObjB', {Utils.rank + 7}, (1, Utils.world_size), (0, Utils.rank), replica_id=0),
         }
 
     @pytest.mark.parametrize('validate_integrity', [True, False])
@@ -519,3 +522,28 @@ class TestNonStrictLoad:
                 assert 'ObjB' in loaded_state_dict
                 assert missing_keys == set()
                 assert unexpected_keys == set()
+
+    @pytest.mark.parametrize('save_format', ['zarr', 'torch_dist'])
+    def test_sharded_metadata(self, tmp_path_dist_ckpt, save_format):
+
+        sharded_state_dict = self._get_base_state_dict()
+        with TempNamedDir(tmp_path_dist_ckpt / 'test_exact_load_handling') as ckpt_dir:
+            save_strategy = get_default_strategy(StrategyAction.SAVE_SHARDED, save_format, 1)
+            save(sharded_state_dict, ckpt_dir, save_strategy)
+            torch.distributed.barrier()
+            sharded_metadata = load_sharded_metadata(ckpt_dir)
+            assert set(sh_base.key for sh_base in sharded_metadata.values()) == {'TenA', 'TenB', 'TenC', 'ObjA', 'ObjB'}
+            assert set(sharded_metadata.keys()) == {
+                'TenA', 'TenB', 'TenC',
+                'ObjA/shard_0_1',
+                *(f'ObjB/shard_0.{i}_1.8' for i in range(8)),
+            }
+
+            loaded_state_dict = load(sharded_metadata, ckpt_dir, validate_access_integrity=False)
+
+            assert loaded_state_dict['ObjA/shard_0_1'] == list(range(10))
+            for shard_idx in range(8):
+                assert loaded_state_dict[f'ObjB/shard_0.{shard_idx}_1.8'] == {shard_idx + 7}
+            assert torch.all(loaded_state_dict['TenA'] == torch.arange(2))
+            assert torch.all(loaded_state_dict['TenB'] == torch.arange(3).repeat(8))
+            assert torch.all(loaded_state_dict['TenC'] == torch.arange(3))

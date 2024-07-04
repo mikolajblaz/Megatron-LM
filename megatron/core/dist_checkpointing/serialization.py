@@ -245,7 +245,7 @@ def load_sharded_metadata(
     sharded_metadata = sharded_strategy.load_sharded_metadata(Path(checkpoint_dir))
     if not sharded_strategy.can_handle_sharded_objects:
         validate_sharded_objects_handling(sharded_strategy, common_strategy)
-        common_metadata = common_strategy.load_sharded_metadata(checkpoint_dir)
+        common_metadata = common_strategy.load_sharded_metadata(Path(checkpoint_dir))
         sharded_metadata = merge(sharded_metadata, common_metadata)
     return sharded_metadata
 
